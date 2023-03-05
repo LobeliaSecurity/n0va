@@ -1,6 +1,7 @@
 # n0va
 
-Python3 simple lightweight async Web(HTTP1.1) server that can handle get/post/websocket and loadbalancing, and no content hosting
+Python3 simple lightweight async Web(HTTP1.1) server that can handle get/post/websocket and loadbalancing, and no content hosting  
+Designed for rapid experimentation with silly ideas
 
 ## Installation
 
