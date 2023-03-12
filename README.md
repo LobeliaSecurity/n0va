@@ -38,13 +38,13 @@ class Nova(n0va.Service):
     async def PostTest(self, connection, Request, ReplyHeader):
         ReplyHeader["ReplyContent"] = b"POST:" + Request["content"]
         ReplyHeader["Content-Type"] = b"text/html"
-        ReplyHeader["Status"] = 200
+        ReplyHeader["Status"] = b"200"
         await self.Reply(connection, ReplyHeader)
 
     async def GetTest(self, connection, Request, ReplyHeader):
         ReplyHeader["ReplyContent"] = b"GET:" + Request["content"]
         ReplyHeader["Content-Type"] = b"text/html"
-        ReplyHeader["Status"] = 200
+        ReplyHeader["Status"] = b"200"
         await self.Reply(connection, ReplyHeader)
 
     async def WebsocketSimpleChat(self, connection, Request, ReplyHeader):

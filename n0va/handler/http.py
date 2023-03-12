@@ -2,7 +2,6 @@ from n0va.core.server import AsyncTcp
 import traceback
 import hashlib
 import base64
-import json
 
 
 class server(AsyncTcp):
@@ -11,28 +10,6 @@ class server(AsyncTcp):
         self.PostFunctions = {}
         self.GetFunctions = {}
         self.WebSocketFunctions = {}
-        self.StatusCodes = {
-            200: b"200 OK",
-            303: b"303 See Other",
-            304: b"304 Not Modified",
-            400: b"400 Bad Request",
-            401: b"401 Unauthorized",
-            403: b"403 Forbidden",
-            404: b"404 Not Found",
-            408: b"408 Request Timeout",
-            411: b"411 Length Required",
-            413: b"413 Payload Too Large",
-            414: b"414 URI Too Long",
-            415: b"415 Unsupported Media Type",
-            418: b"418 I'm a teapot",
-            421: b"421 Misdirected Request",
-            426: b"426 Upgrade Required",
-            451: b"451 Unavailable For Legal Reasons",
-            500: b"500 Internal server Error",
-            501: b"501 Not Implemented",
-            502: b"502 Bad gateway",
-            505: b"505 HTTP Version Not Supported"
-        }
         # self.MIME = {
         #     "txt": b"text/plain",
         #     "html": b"text/html",
@@ -51,15 +28,15 @@ class server(AsyncTcp):
         #     "svg": b"image/svg+xml",
         #     "json": b"application/json"
         # }
-        self._Header = (
-            b"HTTP/1.1 %b\r\n" +
-            b"server: %b\r\n" +
-            b"Accept-Ranges: %b\r\n" +
-            b"Content-Length: %i\r\n" +
-            b"Connection: %b\r\n" +
-            b"Keep-Alive: %b\r\n" +
+        self._Header = b"\r\n".join([
+            b"HTTP/1.1 %b",
+            b"server: %b",
+            b"Accept-Ranges: %b",
+            b"Content-Length: %i",
+            b"Connection: %b",
+            b"Keep-Alive: %b",
             b"Content-Type: %b\r\n"
-        )
+        ])
         self.serverFunctions = {
             b"GET": self.Get,
             b"POST": self.Post,
@@ -82,7 +59,7 @@ class server(AsyncTcp):
 
     async def Reply(self, connection, header):
         _ReplyBuffer = self._Header % (
-            self.StatusCodes[header["Status"]],
+            header["Status"],
             header["server"],
             header["Accept-Ranges"],
             len(header["ReplyContent"]),
@@ -93,18 +70,6 @@ class server(AsyncTcp):
         for a in header["Additional"]:
             _ReplyBuffer += a + b"\r\n"
         await connection.Send(_ReplyBuffer + b"\r\n" + header["ReplyContent"])
-
-    async def ReplyJustCode(self, code, connection, Request, ReplyHeader):
-        ReplyHeader["ReplyContent"] = self.StatusCodes[code]
-        ReplyHeader["Content-Type"] = b"text/html"
-        ReplyHeader["Status"] = code
-        await self.Reply(connection, ReplyHeader)
-
-    async def Redirect(self, connection, to):
-        await connection.Send(b"HTTP/1.1 301 Moved Permanently\r\nLocation: %b\r\n\r\n\r\n" % to)
-
-    async def DumpEncodeJson(self, d):
-        return json.dumps(d).encode("utf-8")
 
     async def WebSockRecv(self, connection):
         buf = await connection.Recv()
@@ -148,28 +113,16 @@ class server(AsyncTcp):
         return(R)
 
     async def serverFunctionHandler(self, connection, Request, ReplyHeader):
-        try:
-            await self.serverFunctions[Request["method"]](connection, Request, ReplyHeader)
-        except:
-            await self.ReplyJustCode(501, connection, Request, ReplyHeader)
+        await self.serverFunctions[Request["method"]](connection, Request, ReplyHeader)
 
     async def GetFunctionHandler(self, connection, Request, ReplyHeader):
-        try:
-            await self.GetFunctions[Request["path"].decode("utf-8")](connection, Request, ReplyHeader)
-        except:
-            await self.ReplyJustCode(500, connection, Request, ReplyHeader)
+        await self.GetFunctions[Request["path"].decode("utf-8")](connection, Request, ReplyHeader)
 
     async def PostFunctionHandler(self, connection, Request, ReplyHeader):
-        try:
-            await self.PostFunctions[Request["path"].decode("utf-8")](connection, Request, ReplyHeader)
-        except:
-            await self.ReplyJustCode(500, connection, Request, ReplyHeader)
+        await self.PostFunctions[Request["path"].decode("utf-8")](connection, Request, ReplyHeader)
 
     async def WebSocketFunctionHandler(self, connection, Request, ReplyHeader):
-        try:
-            await self.WebSocketFunctions[Request["path"].decode("utf-8")](connection, Request, ReplyHeader)
-        except:
-            await connection.Close()
+        await self.WebSocketFunctions[Request["path"].decode("utf-8")](connection, Request, ReplyHeader)
 
     async def Get(self, connection, Request, ReplyHeader):
         ReqPath = Request["path"].decode("utf-8")
@@ -177,12 +130,7 @@ class server(AsyncTcp):
             data = Request["path"].split(b"?")
             Request["path"] = data[0]
             Request.update({"content": data[1]})
-            if(Request["path"].decode("utf-8") in self.GetFunctions):
-                await self.GetFunctionHandler(connection, Request, ReplyHeader)
-            else:
-                await self.ReplyJustCode(404, connection, Request, ReplyHeader)
-        else:
-            await self.ReplyJustCode(404, connection, Request, ReplyHeader)
+        await self.GetFunctionHandler(connection, Request, ReplyHeader)
 
     async def Post(self, connection, Request, ReplyHeader):
         ReqPath = Request["path"].decode("utf-8")
@@ -237,5 +185,5 @@ class server(AsyncTcp):
                     Request.update({"content": body})
                 await self.serverFunctionHandler(connection, Request, h)
         except:
-            traceback.print_exc()
+            # traceback.print_exc()
             await connection.Close()
