@@ -2,6 +2,7 @@ from n0va.core.server import AsyncTcp
 import traceback
 import hashlib
 import base64
+import io
 
 
 class server(AsyncTcp):
@@ -28,7 +29,7 @@ class server(AsyncTcp):
         #     "svg": b"image/svg+xml",
         #     "json": b"application/json"
         # }
-        self._Header = b"\r\n".join([
+        self._Header = b"\r\n".join((
             b"HTTP/1.1 %b",
             b"server: %b",
             b"Accept-Ranges: %b",
@@ -36,7 +37,7 @@ class server(AsyncTcp):
             b"Connection: %b",
             b"Keep-Alive: %b",
             b"Content-Type: %b\r\n"
-        ])
+        ))
         self.serverFunctions = {
             b"GET": self.Get,
             b"POST": self.Post,
@@ -93,24 +94,28 @@ class server(AsyncTcp):
         if(is_Masked):
             # Resulut[ i ] ＝ buf[ i ] xor key [ i mod 4 ]
             Masking_key = buf[Ptr:Ptr+4]
-            Result = b""
+            Result = io.BytesIO()
             for i in range(Payload_len):
-                Result += (Payload_data[i] ^
-                           Masking_key[i % 4]).to_bytes(1, 'big')
-            Payload_data = Result
+                Result.write(
+                    (Payload_data[i] ^ Masking_key[i % 4]).to_bytes(1, 'big')
+                )
+            Result.seek(0)
+            Payload_data = Result.read()
         return(opcode, Payload_data)
 
     async def BuildWebSockFrame(self, opcode, payload):
         payload_len = len(payload)
-        R = (0x80 + opcode).to_bytes(1, "big")
+        R = io.BytesIO()
+        R.write((0x80 + opcode).to_bytes(1, "big"))
         if(payload_len <= 125):
-            R += payload_len.to_bytes(1, 'big')
+            R.write(payload_len.to_bytes(1, 'big'))
         elif(payload_len <= 65535):
-            R += b"\x7e" + payload_len.to_bytes(2, 'big')
+            R.write(b"\x7e" + payload_len.to_bytes(2, 'big'))
         elif(65535 < payload_len and payload_len <= 18446744073709551615):
-            R += b"\x7f" + payload_len.to_bytes(8, 'big')
-        R += payload
-        return(R)
+            R.write(b"\x7f" + payload_len.to_bytes(8, 'big'))
+        R.write(payload)
+        R.seek(0)
+        return(R.read())
 
     async def serverFunctionHandler(self, connection, Request, ReplyHeader):
         await self.serverFunctions[Request["method"]](connection, Request, ReplyHeader)
@@ -144,9 +149,13 @@ class server(AsyncTcp):
         m.update(Request["Sec-WebSocket-Key"])
         m.update(b"258EAFA5-E914-47DA-95CA-C5AB0DC85B11")
         await connection.Send(
-            b"HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: "
-            + base64.b64encode(m.digest())
-            + b"\r\n\r\n"
+            b"".join(
+                (
+                    b"HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ",
+                    base64.b64encode(m.digest()),
+                    b"\r\n\r\n"
+                )
+            )
         )
         await self.WebSocketFunctionHandler(connection, Request, ReplyHeader)
 
