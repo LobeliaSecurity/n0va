@@ -59,18 +59,24 @@ class server(AsyncTcp):
         })
 
     async def Reply(self, connection, header):
-        _ReplyBuffer = self._Header % (
-            header["Status"],
-            header["server"],
-            header["Accept-Ranges"],
-            len(header["ReplyContent"]),
-            header["Connection"],
-            header["Keep-Alive"],
-            header["Content-Type"])
-
+        _ReplyBuffer = io.BytesIO()
+        _ReplyBuffer.write(
+            self._Header % (
+                header["Status"],
+                header["server"],
+                header["Accept-Ranges"],
+                len(header["ReplyContent"]),
+                header["Connection"],
+                header["Keep-Alive"],
+                header["Content-Type"])
+        )
         for a in header["Additional"]:
-            _ReplyBuffer += a + b"\r\n"
-        await connection.Send(_ReplyBuffer + b"\r\n" + header["ReplyContent"])
+            _ReplyBuffer.write(a)
+            _ReplyBuffer.write(b"\r\n")
+        _ReplyBuffer.write(b"\r\n")
+        _ReplyBuffer.write(header["ReplyContent"])
+        _ReplyBuffer.seek(0)
+        await connection.Send(_ReplyBuffer.read())
 
     async def WebSockRecv(self, connection):
         buf = await connection.Recv()
