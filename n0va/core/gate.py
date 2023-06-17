@@ -1,5 +1,6 @@
 import asyncio
 import ssl
+import n0va.core.stream
 
 
 class Gate():
@@ -10,17 +11,13 @@ class Gate():
         {
             "EntranceHost": ip address or domain name,
             "EntrancePort": port num,
-            "gateMapping": {
+            "GateMapping": {
                 mapping hostname, this is used for SNI callback. key of "EntranceSslContext": {
                     "EntranceSslContext": ssl.SSLContext of mapping hostname this cant be None object(must TLS),
                     "Destinations": [ this parameter is array because gate has load balancing
                         {
                             "Host": ip address or domain name ,
                             "Port": port num,
-                            "SSL": {
-                                "serverName": for checking host name,
-                                "Context": ssl.SSLContext using for conect to Destination or if non TLS, just set None object,
-                            }
                         }
                     ]
                 }
@@ -30,19 +27,19 @@ class Gate():
         self.gateSettingTree = gate_setting_tree
         self.EntranceHost = self.gateSettingTree["EntranceHost"]
         self.EntrancePort = self.gateSettingTree["EntrancePort"]
-        self.gateMapping = self.gateSettingTree["gateMapping"]
+        self.GateMapping = self.gateSettingTree["GateMapping"]
         self.DestinationsWeight = {}
-        for gate_map in self.gateMapping:
+        for gate_map in self.GateMapping:
             """
                 self.DestinationsWeight = {
-                    gateMapping, mapping hostname: [0, ... Destinations[n]]
+                    GateMapping, mapping hostname: [0, ... Destinations[n]]
                 }
             """
             self.DestinationsWeight[gate_map] = [
-                0 for x in self.gateMapping[gate_map]['Destinations']
+                0 for x in self.GateMapping[gate_map]['Destinations']
             ]
             setattr(
-                self.gateMapping[gate_map]["EntranceSslContext"],
+                self.GateMapping[gate_map]["EntranceSslContext"],
                 "DomainName",
                 gate_map
             )
@@ -57,8 +54,7 @@ class Gate():
 
     def __gateSniCallback__(self, ssl_sock, domain, ssl_ctx, as_callback=True):
         try:
-            ssl_sock.context = self.gateMapping[domain]["EntranceSslContext"]
-
+            ssl_sock.context = self.GateMapping[domain]["EntranceSslContext"]
         except:
             raise ssl.ALERT_DESCRIPTION_HANDSHAKE_FAILURE
         return None
@@ -109,7 +105,6 @@ class Gate():
         destination_connection, destination_index = await self.__openDestination__(
             destination_name
         )
-
         await self.__opengate__(
             entrance_connection,
             destination_connection
@@ -119,22 +114,23 @@ class Gate():
     async def __openDestination__(self, destination_name):
         minimum_index = self.DestinationsWeight[destination_name].index(
             min(self.DestinationsWeight[destination_name]))
-        destination = self.gateMapping[destination_name]["Destinations"][minimum_index]
-        destination_context = ssl.create_default_context()
+        destination = self.GateMapping[destination_name]["Destinations"][minimum_index]
+        # destination_context = ssl.create_default_context()
         reader, writer = await asyncio.open_connection(
             destination["Host"],
             destination["Port"],
-            ssl=destination_context,
-            server_hostname=destination["SSL"]["serverName"])
+            # ssl=destination_context,
+            # server_hostname=destination["SSL"]["serverName"]
+        )
         self.DestinationsWeight[destination_name][minimum_index] += 1
-        return AsyncStream(reader, writer), minimum_index
+        return n0va.core.stream.AsyncStream(reader, writer), minimum_index
 
     async def __proxyInitHandler__(self, reader, writer):
         # Connection MUST be argment
-        connection = AsyncStream(reader, writer)
+        connection = n0va.core.stream.AsyncStream(reader, writer)
         await self.__proxyHandler__(connection)
 
-    async def __start__(self):
+    async def __Start__(self):
         entrance_ssl_context = ssl.create_default_context(
             purpose=ssl.Purpose.CLIENT_AUTH
         )
@@ -144,5 +140,5 @@ class Gate():
         async with server:
             await server.serve_forever()
 
-    def start(self):
-        asyncio.run(self.__start__())
+    def Start(self):
+        asyncio.run(self.__Start__())

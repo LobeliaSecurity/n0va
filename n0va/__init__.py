@@ -1,14 +1,14 @@
 import asyncio
 import ssl
 
-import n0va.handler.http
+import n0va.handler.http as http
+import n0va.core.gate as gate
 
 
-class Service(n0va.handler.http.server):
+class Service(http.server):
     def EnableSSL(self, domain_cert, private_key):
-        ctx = ssl.SSLContext(ssl.PROTOCOL_TLS)
+        ctx = ssl.create_default_context()
         ctx.load_cert_chain(domain_cert, private_key)
-        ctx.options |= ssl.OP_NO_TLSv1 | ssl.OP_NO_TLSv1_1
         self._SSL_Context = ctx
 
     def Start(self):
