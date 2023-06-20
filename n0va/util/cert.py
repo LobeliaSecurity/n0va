@@ -12,8 +12,9 @@ class CertificateAuthority:
         self.CA_SerialNumber = 0
         self.CA_NotBefore = 0
         self.CA_NotAfter = 30*365*24*60*60
-        self.CA_CertPath = ""
-        self.CA_PrivateKeyPath = ""
+        self.CA_CertPath_pem = ""
+        self.CA_PrivateKeyPath_pem = ""
+        self.CA_PrivateKeyPath_der = ""
 
     def ca_make(self) -> None:
         # create key pair
@@ -48,11 +49,12 @@ class CertificateAuthority:
         cert.sign(key, 'sha256')
 
         # save cert
-        open(self.CA_CertPath, 'wb').write(
+        open(self.CA_CertPath_pem, 'wb').write(
             crypto.dump_certificate(crypto.FILETYPE_PEM, cert))
-        open(self.CA_PrivateKeyPath, 'wb').write(
+        open(self.CA_PrivateKeyPath_pem, 'wb').write(
             crypto.dump_privatekey(crypto.FILETYPE_PEM, key, 'aes256', self.CA_PrivatePassKey.encode('ascii')))
-
+        open(self.CA_PrivateKeyPath_der, 'wb').write(
+            crypto.dump_certificate(crypto.FILETYPE_ASN1, cert))
 
 class Certificate(CertificateAuthority):
     def __init__(self) -> None:
