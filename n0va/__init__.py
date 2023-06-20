@@ -3,6 +3,7 @@ import ssl
 
 import n0va.handler.http as http
 import n0va.core.gate as gate
+import n0va.util.cert as cert
 
 
 class Service(http.server):
