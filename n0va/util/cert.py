@@ -77,10 +77,10 @@ class Certificate(CertificateAuthority):
 
     def c_make(self):
         # create key pair
-        f = open(self.CA_PrivateKeyPath, 'rb')
+        f = open(self.CA_PrivateKeyPath_pem, 'rb')
         ky = f.read()
         f.close()
-        f = open(self.CA_CertPath, 'rb')
+        f = open(self.CA_CertPath_pem, 'rb')
         ct = f.read()
         f.close()
         CAkey = crypto.load_privatekey(
