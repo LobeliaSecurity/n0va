@@ -39,7 +39,9 @@ class CertificateAuthority:
             crypto.X509Extension(
                 "keyUsage".encode("ascii"), True, "cRLSign, keyCertSign".encode('ascii')),
             crypto.X509Extension(
-                'subjectKeyIdentifier'.encode('ascii'), False, b"hash", subject=cert),
+                'subjectKeyIdentifier'.encode('ascii'), False, b"hash", subject=cert)
+        ])
+        cert.add_extensions([
             crypto.X509Extension(
                 'authorityKeyIdentifier'.encode('ascii'), False, b"keyid:always", issuer=cert)
         ])
@@ -55,6 +57,7 @@ class CertificateAuthority:
             crypto.dump_privatekey(crypto.FILETYPE_PEM, key, 'aes256', self.CA_PrivatePassKey.encode('ascii')))
         open(self.CA_PrivateKeyPath_der, 'wb').write(
             crypto.dump_certificate(crypto.FILETYPE_ASN1, cert))
+
 
 class Certificate(CertificateAuthority):
     def __init__(self) -> None:
