@@ -29,24 +29,26 @@ class server(AsyncTcp):
         #     "svg": b"image/svg+xml",
         #     "json": b"application/json"
         # }
-        self._Header = b"\r\n".join((
-            b"HTTP/1.1 %b",
-            b"server: %b",
-            b"Accept-Ranges: %b",
-            b"Content-Length: %i",
-            b"Connection: %b",
-            b"Keep-Alive: %b",
-            b"Content-Type: %b\r\n"
-        ))
+        self._Header = b"\r\n".join(
+            (
+                b"HTTP/1.1 %b",
+                b"server: %b",
+                b"Accept-Ranges: %b",
+                b"Content-Length: %i",
+                b"Connection: %b",
+                b"Keep-Alive: %b",
+                b"Content-Type: %b\r\n",
+            )
+        )
         self.serverFunctions = {
             b"GET": self.Get,
             b"POST": self.Post,
-            b"WebSocket": self.WebSocket
+            b"WebSocket": self.WebSocket,
         }
         self.ContentLengthLimit = 1024 * 1024 * 3
 
     def NewHeader(self):
-        return({
+        return {
             "Status": 0,
             "server": b"n0va",
             "Accept-Ranges": b"bytes",
@@ -55,20 +57,22 @@ class server(AsyncTcp):
             "Keep-Alive": b"timeout=30, max=100",
             "Content-Type": b"",
             "Additional": [],
-            "ReplyContent": b""
-        })
+            "ReplyContent": b"",
+        }
 
     async def Reply(self, connection, header):
         _ReplyBuffer = io.BytesIO()
         _ReplyBuffer.write(
-            self._Header % (
+            self._Header
+            % (
                 header["Status"],
                 header["server"],
                 header["Accept-Ranges"],
                 len(header["ReplyContent"]),
                 header["Connection"],
                 header["Keep-Alive"],
-                header["Content-Type"])
+                header["Content-Type"],
+            )
         )
         for a in header["Additional"]:
             _ReplyBuffer.write(a)
@@ -80,64 +84,68 @@ class server(AsyncTcp):
 
     async def WebSockRecv(self, connection):
         buf = await connection.Recv()
-        if(len(buf) == 0 or buf[0] == 0x88):
-            return(False)
-        opcode = (buf[0] & 0x0f)
-        is_Masked = (buf[1] >> 7)
-        Payload_len = (buf[1] & 0x7f)
+        if len(buf) == 0 or buf[0] == 0x88:
+            return False
+        opcode = buf[0] & 0x0F
+        is_Masked = buf[1] >> 7
+        Payload_len = buf[1] & 0x7F
         Ptr = 2
         Masking_key = b""
         Payload_data = b""
-        if(Payload_len == 126):
+        if Payload_len == 126:
             # Extended payload length
             Payload_len = int.from_bytes(buf[2:4], "big")
             Ptr = 4
-        elif(Payload_len == 127):
+        elif Payload_len == 127:
             # Extended payload length
             Payload_len = int.from_bytes(buf[2:10], "big")
             Ptr = 10
-        Payload_data = buf[Ptr+4:]
-        if(is_Masked):
+        Payload_data = buf[Ptr + 4 :]
+        if is_Masked:
             # Resulut[ i ] ＝ buf[ i ] xor key [ i mod 4 ]
-            Masking_key = buf[Ptr:Ptr+4]
+            Masking_key = buf[Ptr : Ptr + 4]
             Result = io.BytesIO()
             for i in range(Payload_len):
-                Result.write(
-                    (Payload_data[i] ^ Masking_key[i % 4]).to_bytes(1, 'big')
-                )
+                Result.write((Payload_data[i] ^ Masking_key[i % 4]).to_bytes(1, "big"))
             Result.seek(0)
             Payload_data = Result.read()
-        return(opcode, Payload_data)
+        return (opcode, Payload_data)
 
     async def BuildWebSockFrame(self, opcode, payload):
         payload_len = len(payload)
         R = io.BytesIO()
         R.write((0x80 + opcode).to_bytes(1, "big"))
-        if(payload_len <= 125):
-            R.write(payload_len.to_bytes(1, 'big'))
-        elif(payload_len <= 65535):
-            R.write(b"\x7e" + payload_len.to_bytes(2, 'big'))
-        elif(65535 < payload_len and payload_len <= 18446744073709551615):
-            R.write(b"\x7f" + payload_len.to_bytes(8, 'big'))
+        if payload_len <= 125:
+            R.write(payload_len.to_bytes(1, "big"))
+        elif payload_len <= 65535:
+            R.write(b"\x7e" + payload_len.to_bytes(2, "big"))
+        elif 65535 < payload_len and payload_len <= 18446744073709551615:
+            R.write(b"\x7f" + payload_len.to_bytes(8, "big"))
         R.write(payload)
         R.seek(0)
-        return(R.read())
+        return R.read()
 
     async def serverFunctionHandler(self, connection, Request, ReplyHeader):
         await self.serverFunctions[Request["method"]](connection, Request, ReplyHeader)
 
     async def GetFunctionHandler(self, connection, Request, ReplyHeader):
-        await self.GetFunctions[Request["path"].decode("utf-8")](connection, Request, ReplyHeader)
+        await self.GetFunctions[Request["path"].decode("utf-8")](
+            connection, Request, ReplyHeader
+        )
 
     async def PostFunctionHandler(self, connection, Request, ReplyHeader):
-        await self.PostFunctions[Request["path"].decode("utf-8")](connection, Request, ReplyHeader)
+        await self.PostFunctions[Request["path"].decode("utf-8")](
+            connection, Request, ReplyHeader
+        )
 
     async def WebSocketFunctionHandler(self, connection, Request, ReplyHeader):
-        await self.WebSocketFunctions[Request["path"].decode("utf-8")](connection, Request, ReplyHeader)
+        await self.WebSocketFunctions[Request["path"].decode("utf-8")](
+            connection, Request, ReplyHeader
+        )
 
     async def Get(self, connection, Request, ReplyHeader):
         ReqPath = Request["path"].decode("utf-8")
-        if("?" in ReqPath):
+        if "?" in ReqPath:
             data = Request["path"].split(b"?")
             Request["path"] = data[0]
             Request.update({"content": data[1]})
@@ -145,7 +153,7 @@ class server(AsyncTcp):
 
     async def Post(self, connection, Request, ReplyHeader):
         ReqPath = Request["path"].decode("utf-8")
-        if(ReqPath in self.PostFunctions):
+        if ReqPath in self.PostFunctions:
             await self.PostFunctionHandler(connection, Request, ReplyHeader)
         else:
             await self.ReplyJustCode(404, connection, Request, ReplyHeader)
@@ -159,7 +167,7 @@ class server(AsyncTcp):
                 (
                     b"HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ",
                     base64.b64encode(m.digest()),
-                    b"\r\n\r\n"
+                    b"\r\n\r\n",
                 )
             )
         )
@@ -167,14 +175,14 @@ class server(AsyncTcp):
 
     async def Handler(self, connection):
         try:
-            while(not connection._Writer.is_closing()):
+            while not connection._Writer.is_closing():
                 h = self.NewHeader()
                 Request = {}
                 buf = await connection.Recv()
-                if(len(buf) == 0):
+                if len(buf) == 0:
                     await connection.Close()
                     return
-                while(buf.find(b"\r\n\r\n") == -1):
+                while buf.find(b"\r\n\r\n") == -1:
                     buf += await connection.Recv()
                 Request = {}
                 body_pointer = buf.find(b"\r\n\r\n")
@@ -188,14 +196,14 @@ class server(AsyncTcp):
                         Request.update({p[0].decode("utf-8"): p[1]})
                 except:
                     pass
-                if("Upgrade" in Request and Request["Upgrade"] == b"websocket"):
+                if "Upgrade" in Request and Request["Upgrade"] == b"websocket":
                     Request["method"] = b"WebSocket"
-                elif("Content-Length" in Request):
-                    body = buf[body_pointer+4:]
-                    if(self.ContentLengthLimit < int(Request["Content-Length"])):
+                elif "Content-Length" in Request:
+                    body = buf[body_pointer + 4 :]
+                    if self.ContentLengthLimit < int(Request["Content-Length"]):
                         await connection.Close()
                         return
-                    while(len(body) < int(Request["Content-Length"])):
+                    while len(body) < int(Request["Content-Length"]):
                         body += await connection.Recv()
                     Request.update({"content": body})
                 await self.serverFunctionHandler(connection, Request, h)

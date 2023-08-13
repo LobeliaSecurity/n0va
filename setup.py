@@ -7,10 +7,7 @@ setuptools.setup(
     author="LobeliaSecurity™",
     description="Python3 simple async Web(HTTP1.1) server that can handle get/post and loadbalancing",
     url="https://github.com/LobeliaSecurity/n0va",
-    packages=[
-        x.parent.as_posix() for x in pathlib.Path(".").glob("**/__init__.py")
-    ],
-    requires=[
-    ],
-    python_requires='>=3.10'
+    packages=[x.parent.as_posix() for x in pathlib.Path(".").glob("**/__init__.py")],
+    requires=[],
+    python_requires=">=3.10",
 )
