@@ -11,27 +11,29 @@ class server(AsyncTcp):
         self.PostFunctions = {}
         self.GetFunctions = {}
         self.WebSocketFunctions = {}
-        # self.MIME = {
-        #     "txt": b"text/plain",
-        #     "html": b"text/html",
-        #     "css": b"text/css",
-        #     "js": b"application/javascript",
-        #     "jpg": b"image/jpg",
-        #     "jpeg": b"image/jpeg",
-        #     "png": b"image/png",
-        #     "gif": b"image/gif",
-        #     "ico": b"image/ico",
-        #     "mp4": b"video/mp4",
-        #     "mp3": b"audio/mp3",
-        #     "otf": b"application/x-font-otf",
-        #     "woff": b"application/x-font-woff",
-        #     "ttf": b"application/x-font-ttf",
-        #     "svg": b"image/svg+xml",
-        #     "json": b"application/json"
-        # }
+        self.OnMemoryFiles = {}
+        self.MIME = {
+            "txt": b"text/plain",
+            "html": b"text/html",
+            "css": b"text/css",
+            "js": b"application/javascript",
+            "jpg": b"image/jpg",
+            "jpeg": b"image/jpeg",
+            "png": b"image/png",
+            "gif": b"image/gif",
+            "ico": b"image/ico",
+            "mp4": b"video/mp4",
+            "mp3": b"audio/mp3",
+            "otf": b"application/x-font-otf",
+            "woff": b"application/x-font-woff",
+            "ttf": b"application/x-font-ttf",
+            "svg": b"image/svg+xml",
+            "json": b"application/json",
+            "md": b"text/markdown",
+        }
         self._Header = b"\r\n".join(
             (
-                b"HTTP/1.1 %b",
+                b"HTTP/1.1 %i",
                 b"server: %b",
                 b"Accept-Ranges: %b",
                 b"Content-Length: %i",
@@ -81,6 +83,12 @@ class server(AsyncTcp):
         _ReplyBuffer.write(header["ReplyContent"])
         _ReplyBuffer.seek(0)
         await connection.Send(_ReplyBuffer.read())
+
+    async def ReplyJustCode(self, code, connection, Request, ReplyHeader):
+        ReplyHeader["ReplyContent"] = b"%i" % code
+        ReplyHeader["Content-Type"] = b"text/html"
+        ReplyHeader["Status"] = code
+        await self.Reply(connection, ReplyHeader)
 
     async def WebSockRecv(self, connection):
         buf = await connection.Recv()
@@ -144,12 +152,29 @@ class server(AsyncTcp):
         )
 
     async def Get(self, connection, Request, ReplyHeader):
+        if Request["path"] == b"/":
+            Request["path"] = self.DefaultFile.encode("utf-8")
+        elif Request["path"][:2] == b"/?":
+            Request["path"] = self.DefaultFile.encode("utf-8") + Request["path"][1:]
         ReqPath = Request["path"].decode("utf-8")
-        if "?" in ReqPath:
+        if ReqPath in self.OnMemoryFiles:
+            ReplyHeader["ReplyContent"] = self.OnMemoryFiles[ReqPath]["DATA"]
+            ReplyHeader["Content-Type"] = self.OnMemoryFiles[ReqPath]["MIME"]
+            ReplyHeader["Status"] = 200
+            await self.Reply(connection, ReplyHeader)
+        elif ReqPath in self.GetFunctions:
+            Request.update({"content": b""})
+            await self.GetFunctionHandler(connection, Request, ReplyHeader)
+        elif "?" in ReqPath:
             data = Request["path"].split(b"?")
             Request["path"] = data[0]
             Request.update({"content": data[1]})
-        await self.GetFunctionHandler(connection, Request, ReplyHeader)
+            if Request["path"].decode("utf-8") in self.GetFunctions:
+                await self.GetFunctionHandler(connection, Request, ReplyHeader)
+            else:
+                await self.ReplyJustCode(404, connection, Request, ReplyHeader)
+        else:
+            await self.ReplyJustCode(404, connection, Request, ReplyHeader)
 
     async def Post(self, connection, Request, ReplyHeader):
         ReqPath = Request["path"].decode("utf-8")
