@@ -18,7 +18,7 @@ class Service(http.server):
         path = (path + "/**").replace("//", "/")
         l = glob.glob(path, recursive=True)
         self.root_dir = l[0]
-        print("Root Directory:", self.root_dir)
+        # print("Root Directory:", self.root_dir)
         tmp = [a.replace(self.root_dir, "/") for a in l]
         for p in tmp:
             if "." in p:
@@ -29,7 +29,7 @@ class Service(http.server):
                     data = f.read()
                     f.close()
                     self.OnMemoryFiles[p] = {"MIME": self.MIME[extension], "DATA": data}
-                    print("Stored File:", p)
+                    # print("Stored File:", p)
 
     def Reflesh(self, path):
         try:
