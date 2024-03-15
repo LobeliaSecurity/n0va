@@ -8,6 +8,7 @@ import io
 class server(AsyncTcp):
     def __init__(self, host, port):
         super().__init__(host=host, port=port)
+        self.DefaultFile = "/index.html"
         self.PostFunctions = {}
         self.GetFunctions = {}
         self.WebSocketFunctions = {}
