@@ -5,6 +5,41 @@ import base64
 import io
 
 
+class MediaTypes(dict):
+    def __init__(self):
+        super().__init__(
+            {
+                "txt": b"text/plain",
+                "html": b"text/html",
+                "css": b"text/css",
+                "js": b"application/javascript",
+                "jpg": b"image/jpg",
+                "jpeg": b"image/jpeg",
+                "png": b"image/png",
+                "gif": b"image/gif",
+                "ico": b"image/ico",
+                "mp4": b"video/mp4",
+                "mp3": b"audio/mp3",
+                "otf": b"application/x-font-otf",
+                "woff": b"application/x-font-woff",
+                "woff2": b"application/font-woff2",
+                "ttf": b"application/x-font-ttf",
+                "svg": b"image/svg+xml",
+                "json": b"application/json",
+                "md": b"text/markdown",
+            }
+        )
+
+    def __getitem__(self, key):
+        if key in self:
+            return super().__getitem__(key)
+        else:
+            return b"application/octet-stream"
+
+
+MIME = MediaTypes()
+
+
 class server(AsyncTcp):
     def __init__(self, host, port):
         super().__init__(host=host, port=port)
@@ -13,25 +48,7 @@ class server(AsyncTcp):
         self.GetFunctions = {}
         self.WebSocketFunctions = {}
         self.OnMemoryFiles = {}
-        self.MIME = {
-            "txt": b"text/plain",
-            "html": b"text/html",
-            "css": b"text/css",
-            "js": b"application/javascript",
-            "jpg": b"image/jpg",
-            "jpeg": b"image/jpeg",
-            "png": b"image/png",
-            "gif": b"image/gif",
-            "ico": b"image/ico",
-            "mp4": b"video/mp4",
-            "mp3": b"audio/mp3",
-            "otf": b"application/x-font-otf",
-            "woff": b"application/x-font-woff",
-            "ttf": b"application/x-font-ttf",
-            "svg": b"image/svg+xml",
-            "json": b"application/json",
-            "md": b"text/markdown",
-        }
+        self.MIME = MIME
         self._Header = b"\r\n".join(
             (
                 b"HTTP/1.1 %i",
@@ -138,14 +155,16 @@ class server(AsyncTcp):
         await self.serverFunctions[Request["method"]](connection, Request, ReplyHeader)
 
     async def GetFunctionHandler(self, connection, Request, ReplyHeader):
-        await self.GetFunctions[Request["path"].decode("utf-8")](
+        R = await self.GetFunctions[Request["path"].decode("utf-8")](
             connection, Request, ReplyHeader
         )
+        await self.Reply(connection, R)
 
     async def PostFunctionHandler(self, connection, Request, ReplyHeader):
-        await self.PostFunctions[Request["path"].decode("utf-8")](
+        R = await self.PostFunctions[Request["path"].decode("utf-8")](
             connection, Request, ReplyHeader
         )
+        await self.Reply(connection, R)
 
     async def WebSocketFunctionHandler(self, connection, Request, ReplyHeader):
         await self.WebSocketFunctions[Request["path"].decode("utf-8")](
@@ -159,8 +178,8 @@ class server(AsyncTcp):
             Request["path"] = self.DefaultFile.encode("utf-8") + Request["path"][1:]
         ReqPath = Request["path"].decode("utf-8")
         if ReqPath in self.OnMemoryFiles:
-            ReplyHeader["ReplyContent"] = self.OnMemoryFiles[ReqPath]["DATA"]
-            ReplyHeader["Content-Type"] = self.OnMemoryFiles[ReqPath]["MIME"]
+            ReplyHeader["ReplyContent"] = self.OnMemoryFiles[ReqPath].data
+            ReplyHeader["Content-Type"] = self.OnMemoryFiles[ReqPath].mime
             ReplyHeader["Status"] = 200
             await self.Reply(connection, ReplyHeader)
         elif ReqPath in self.GetFunctions:
@@ -233,6 +252,6 @@ class server(AsyncTcp):
                         body += await connection.Recv()
                     Request.update({"content": body})
                 await self.serverFunctionHandler(connection, Request, h)
-        except:
-            # traceback.print_exc()
+        except Exception as e:
             await connection.Close()
+            raise e

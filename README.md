@@ -14,62 +14,70 @@ pip install git+https://github.com/LobeliaSecurity/n0va.git
 ## Example / 1.0.0
 
 ```python
+
 import n0va
+import pathlib
 
 
-class Nova(n0va.Service):
-    def __init__(self, host, port) -> None:
-        super().__init__(host=host, port=port)
-        self.connections = {}
-        self.PostFunctions = {
-            "/PostTest.post": self.PostTest
-        }
-        self.GetFunctions = {
-            "/GetTest.get": self.GetTest
-        }
-        self.WebSocketFunctions = {
-            "/WebsocketSimpleChat.ws": self.WebsocketSimpleChat
-        }
+class Service(n0va.Service):
+    def __init__(self, host, port, root_path):
+        super().__init__(host=host, port=port, root_path=root_path)
         # self.EnableSSL(
         #     domain_cert="domain.cert.pem",
         #     private_key="private.key.pem"
         # )
 
-    async def PostTest(self, connection, Request, ReplyHeader):
-        ReplyHeader["ReplyContent"] = b"POST:" + Request["content"]
-        ReplyHeader["Content-Type"] = b"text/html"
-        ReplyHeader["Status"] = b"200"
-        await self.Reply(connection, ReplyHeader)
 
-    async def GetTest(self, connection, Request, ReplyHeader):
-        ReplyHeader["ReplyContent"] = b"GET:" + Request["content"]
-        ReplyHeader["Content-Type"] = b"text/html"
-        ReplyHeader["Status"] = b"200"
-        await self.Reply(connection, ReplyHeader)
+service = Service(
+    host="127.0.0.1",
+    port=80,
+    root_path=pathlib.Path("./documents").resolve().as_posix(),
+)
+
+
+@service.onGet("/GetTest.get")
+async def GetTest(connection, Request, ReplyHeader):
+    ReplyHeader["ReplyContent"] = b"GET:" + Request["content"]
+    ReplyHeader["Content-Type"] = b"text/html"
+    ReplyHeader["Status"] = 200
+    return ReplyHeader
+
+
+@service.onPost("/PostTest.get")
+async def PostTest(connection, Request, ReplyHeader):
+    ReplyHeader["ReplyContent"] = b"POST:" + Request["content"]
+    ReplyHeader["Content-Type"] = b"text/html"
+    ReplyHeader["Status"] = 200
+    return ReplyHeader
+
+
+class WebsocketSimpleChat:
+    def __init__(self) -> None:
+        self.connections = {}
 
     async def WebsocketSimpleChat(self, connection, Request, ReplyHeader):
         self.connections[connection] = None
         try:
-            while(True):
-                opcode, Payload_data = await self.WebSockRecv(connection)
+            while True:
+                opcode, Payload_data = await service.WebSockRecv(connection)
                 await self.spread(opcode, Payload_data)
-
         except:
             self.connections.pop(connection)
 
     async def spread(self, opcode, Payload_data):
         for c in self.connections:
-            await c.Send(
-                await self.BuildWebSockFrame(opcode, Payload_data)
-            )
+            await c.Send(await service.BuildWebSockFrame(opcode, Payload_data))
 
 
-nova = Nova(
-    host="127.0.0.1",
-    port=7777
-)
+websocketSimpleChat = WebsocketSimpleChat()
 
-nova.Start()
+
+@service.onWebsocket("/WebsocketSimpleChat.ws")
+async def SimpleChat(connection, Request, ReplyHeader):
+    await websocketSimpleChat.WebsocketSimpleChat(connection, Request, ReplyHeader)
+
+
+service.Start()
 
 ```
 

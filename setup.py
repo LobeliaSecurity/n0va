@@ -8,6 +8,8 @@ setuptools.setup(
     description="Python3 simple async Web(HTTP1.1) server that can handle get/post and loadbalancing",
     url="https://github.com/LobeliaSecurity/n0va",
     packages=[x.parent.as_posix() for x in pathlib.Path(".").glob("**/__init__.py")],
-    requires=[],
+    install_requires=[
+        "pyOpenSSL<=23.3.0",
+    ],
     python_requires=">=3.10",
 )

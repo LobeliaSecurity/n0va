@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <meta charset="utf-8">
+    <title>n0va</title>
+</head>
+
+<body>
+    <div>
+        <a href="/GetTest.get?TEST">/GetTest.get?TEST</a>
+    </div>
+    <hr>
+    <div>
+        <form action="/PostTest.get" method="post">
+            <div>/PostTest.get</div>
+            <input type="text" name="TEST">
+        </form>
+    </div>
+    <hr>
+    <div>
+        <div>
+            <input in type="text">
+        </div>
+        <div messages></div>
+    </div>
+</body>
+
+</html>
+<script>
+    const ws = new WebSocket('ws://localhost/WebsocketSimpleChat.ws');
+
+    ws.onmessage = function (event) {
+        document.querySelector("[messages]").appendChild(Object.assign(
+            document.createElement("div"),
+            {
+                textContent: `${event.data} | ${(new Date()).toISOString()}`,
+            }
+        ));
+    };
+    document.querySelector("[in]").addEventListener("change", (event) => {
+        ws.send(event.target.value);
+    });
+</script>
