@@ -20,10 +20,10 @@ def parse(data, bytes_format):
             R.append(data[pointer : pointer + p])
             pointer += p
     bottom = data[pointer:]
-    if len(data) < pointer + 1:
-        R.append(None)
-    else:
-        R.append(bottom)
+    # if len(data) < pointer + 1:
+    #     R.append(None)
+    # else:
+    R.append(bottom)
     return R
 
 
