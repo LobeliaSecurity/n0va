@@ -127,3 +127,11 @@ dmypy.json
 
 # Pyre type checker
 .pyre/
+
+# Dashboard local SQLite / frontend (DB lives under .n0va/; legacy filename kept)
+dashboard.sqlite3
+.n0va/
+dashboard/frontend/node_modules/
+
+# n0va egg info
+n0va.egg-info/

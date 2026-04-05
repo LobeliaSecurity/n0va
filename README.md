@@ -1,88 +1,82 @@
 # n0va
 
-Python3 simple lightweight async Web(HTTP1.1) server that can handle get/post/websocket and loadbalancing, and no content hosting  
-Designed for rapid experimentation with silly ideas
+**n0va** is a small **asyncio** toolkit for Python 3.10+: a lightweight **HTTP/1.1** server, a **TCP proxy (“Gate”)** you can observe and extend, and an optional **dashboard** for local ops. Built for prototypes, labs, and dev workflows—not a replacement for large production frontends or CDNs.
 
-## Installation
+**License:** [MIT](LICENSE)
 
-Install n0va with pip
+---
+
+## Why n0va?
+
+- **Gate — inspect traffic without giving up transparency.** Forward TCP end-to-end, terminate TLS when you need to, route by SNI or HTTP, load-balance upstreams, and hook **bidirectional streams** to log or reshape bytes—useful for debugging, security research, and custom routing.
+- **Simple HTTP & WebSocket surface.** Decorate routes, serve static files for **local dev**, optional TLS—enough to ship a demo or internal tool quickly.
+- **Optional dashboard.** Manage Gate configs, certificates, and a few helper utilities from the browser when you want a UI instead of only code.
+
+---
+
+## Install
 
 ```bash
 pip install git+https://github.com/LobeliaSecurity/n0va.git
 ```
 
-## Example / 1.0.0
+Requires **Python ≥ 3.10** and `pyOpenSSL` (see `setup.py`).
+
+---
+
+## Quick start (HTTP)
 
 ```python
-
-import n0va
 import pathlib
+import n0va
 
 
 class Service(n0va.Service):
     def __init__(self, host, port, root_path):
         super().__init__(host=host, port=port, root_path=root_path)
-        # self.EnableSSL(
-        #     domain_cert="domain.cert.pem",
-        #     private_key="private.key.pem"
-        # )
 
 
 service = Service(
     host="127.0.0.1",
-    port=80,
+    port=8080,
     root_path=pathlib.Path("./documents").resolve().as_posix(),
 )
 
 
-@service.onGet("/GetTest.get")
-async def GetTest(connection, Request, ReplyHeader):
-    ReplyHeader["ReplyContent"] = b"GET:" + Request["content"]
-    ReplyHeader["Content-Type"] = b"text/html"
-    ReplyHeader["Status"] = 200
-    return ReplyHeader
-
-
-@service.onPost("/PostTest.get")
-async def PostTest(connection, Request, ReplyHeader):
-    ReplyHeader["ReplyContent"] = b"POST:" + Request["content"]
-    ReplyHeader["Content-Type"] = b"text/html"
-    ReplyHeader["Status"] = 200
-    return ReplyHeader
-
-
-class WebsocketSimpleChat:
-    def __init__(self) -> None:
-        self.connections = {}
-
-    async def WebsocketSimpleChat(self, connection, Request, ReplyHeader):
-        self.connections[connection] = None
-        try:
-            while True:
-                opcode, Payload_data = await service.WebSockRecv(connection)
-                await self.spread(opcode, Payload_data)
-        except:
-            self.connections.pop(connection)
-
-    async def spread(self, opcode, Payload_data):
-        for c in self.connections:
-            await c.Send(await service.BuildWebSockFrame(opcode, Payload_data))
-
-
-websocketSimpleChat = WebsocketSimpleChat()
-
-
-@service.onWebsocket("/WebsocketSimpleChat.ws")
-async def SimpleChat(connection, Request, ReplyHeader):
-    await websocketSimpleChat.WebsocketSimpleChat(connection, Request, ReplyHeader)
+@service.onGet("/hello")
+async def hello(ctx: n0va.RequestContext) -> n0va.HttpResponse:
+    return n0va.HttpResponse(status=200, body=b"ok", content_type=b"text/plain")
 
 
 service.Start()
-
 ```
 
-<div align="center">
+More patterns (WebSocket, routing, Gate) live under **`example/`** and **`gate_sample.py`**.
 
-![](https://repository-images.githubusercontent.com/609695883/30425d66-cee8-461e-a0e6-56aee2f7af1f)
+---
 
-</div>
+## Dashboard (optional)
+
+Build the frontend, then from the repo root run `python dashboard/run.py`. By default the app listens on **`127.0.0.1:8765`** and serves REST under **`/api/v1/`**. Use `N0VA_DASHBOARD_DATA` to change where persistent data is rooted.
+
+---
+
+## Environment hints
+
+| Variable | Purpose |
+| -------- | ------- |
+| `N0VA_NO_SUPERVISE` | Disable parent/child supervision; run as a single process |
+| `N0VA_DASHBOARD_DATA` | Base path for dashboard data (see dashboard docs / `.n0va/` layout) |
+| `N0VA_GATE_VERBOSE` | Extra logging for Gate samples (e.g. `1`) |
+
+---
+
+## Repository layout
+
+| Path | Role |
+| ---- | ---- |
+| `n0va/` | Core library |
+| `dashboard/` | Web UI + API |
+| `example/` | App examples |
+
+Built-in static file serving is meant for **development**; use your own stack for heavy production traffic.

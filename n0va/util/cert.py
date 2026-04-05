@@ -1,4 +1,43 @@
+import ssl
+
 from OpenSSL import crypto
+
+
+def _set_name_field(name: crypto.X509Name, field: str, value: str) -> None:
+    """空文字は付与しない（空の C は ASN.1 上問題になり `string too short` 等の原因になる）。"""
+    v = (value or "").strip()
+    if not v:
+        return
+    if field == "C" and len(v) != 2:
+        return
+    setattr(name, field, v)
+
+
+def _load_privatekey_pem(pem: bytes, passphrase: str | None) -> crypto.PKey:
+    """
+    PEM 秘密鍵を読み込む。平文・空パス暗号化・パス付き暗号化を区別する。
+    `passphrase` が非空のときはそれのみ試す。
+    非対話用途: パスフレーズなしのときは `passphrase=None` を先に使わず `b""` を試し、
+    暗号化 PEM で OpenSSL が TTY にパスフレーズを聞きにいくのを避ける。
+    """
+    pw = (passphrase or "").strip()
+    if pw:
+        return crypto.load_privatekey(
+            crypto.FILETYPE_PEM, pem, passphrase=pw.encode("utf-8")
+        )
+    try:
+        return crypto.load_privatekey(crypto.FILETYPE_PEM, pem, passphrase=b"")
+    except crypto.Error:
+        pass
+    return crypto.load_privatekey(crypto.FILETYPE_PEM, pem, passphrase=None)
+
+
+def load_server_ssl_context(cert_path: str, key_path: str) -> ssl.SSLContext:
+    """ディスク上の PEM（サーバー証明書・秘密鍵）から TLS サーバー用 `SSLContext` を構築する。"""
+    ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    ctx.options |= ssl.OP_NO_TLSv1 | ssl.OP_NO_TLSv1_1
+    ctx.load_cert_chain(cert_path, key_path)
+    return ctx
 
 
 class CertificateAuthority:
@@ -23,11 +62,13 @@ class CertificateAuthority:
 
         # create self-signed cert
         cert = crypto.X509()
-        cert.get_subject().CN = self.CA_CommonName
-        cert.get_subject().O = self.CA_Organization
-        cert.get_subject().ST = self.CA_State
-        cert.get_subject().L = self.CA_Locality
-        cert.get_subject().C = self.CA_Country
+        subj = cert.get_subject()
+        ca_cn = (self.CA_CommonName or "n0va-local-ca").strip() or "n0va-local-ca"
+        subj.CN = ca_cn
+        _set_name_field(subj, "O", self.CA_Organization)
+        _set_name_field(subj, "ST", self.CA_State)
+        _set_name_field(subj, "L", self.CA_Locality)
+        _set_name_field(subj, "C", self.CA_Country)
         cert.set_serial_number(self.CA_SerialNumber)
         cert.gmtime_adj_notBefore(self.CA_NotBefore)
         cert.gmtime_adj_notAfter(self.CA_NotAfter)
@@ -67,14 +108,18 @@ class CertificateAuthority:
         open(self.CA_CertPath_pem, "wb").write(
             crypto.dump_certificate(crypto.FILETYPE_PEM, cert)
         )
-        open(self.CA_PrivateKeyPath_pem, "wb").write(
-            crypto.dump_privatekey(
+        pw = (self.CA_PrivatePassKey or "").strip()
+        if pw:
+            key_pem = crypto.dump_privatekey(
                 crypto.FILETYPE_PEM,
                 key,
                 "aes256",
-                self.CA_PrivatePassKey.encode("ascii"),
+                pw.encode("utf-8"),
             )
-        )
+        else:
+            # 開発用: パスフレーズなしは平文 PEM（対話プロンプトを避ける）
+            key_pem = crypto.dump_privatekey(crypto.FILETYPE_PEM, key)
+        open(self.CA_PrivateKeyPath_pem, "wb").write(key_pem)
         open(self.CA_PrivateKeyPath_der, "wb").write(
             crypto.dump_certificate(crypto.FILETYPE_ASN1, cert)
         )
@@ -97,24 +142,26 @@ class Certificate(CertificateAuthority):
         self.pfxPath = ""
 
     def c_make(self):
-        # create key pair
         f = open(self.CA_PrivateKeyPath_pem, "rb")
         ky = f.read()
         f.close()
         f = open(self.CA_CertPath_pem, "rb")
         ct = f.read()
         f.close()
-        CAkey = crypto.load_privatekey(
-            crypto.FILETYPE_PEM, ky, passphrase=self.CA_PrivatePassKey.encode("ascii")
-        )
+        pp = (self.CA_PrivatePassKey or "").strip() or None
+        CAkey = _load_privatekey_pem(ky, pp)
         CAcert = crypto.load_certificate(crypto.FILETYPE_PEM, ct)
 
         key = crypto.PKey()
         key.generate_key(crypto.TYPE_RSA, 4096)
-        # create self-signed cert
         cert = crypto.X509()
-        cert.get_subject().C = self.country
-        cert.get_subject().CN = self.commonName
+        subj = cert.get_subject()
+        cn = (self.commonName or "localhost").strip() or "localhost"
+        subj.CN = cn
+        _set_name_field(subj, "O", self.organization)
+        _set_name_field(subj, "ST", self.state)
+        _set_name_field(subj, "L", self.locality)
+        _set_name_field(subj, "C", self.country)
         cert.set_serial_number(self.serialNumber)
         cert.gmtime_adj_notBefore(self.notBefore)
         cert.gmtime_adj_notAfter(self.notAfter)
@@ -139,9 +186,9 @@ class Certificate(CertificateAuthority):
                     b"".join(
                         [
                             b"DNS:*.",
-                            self.commonName.encode("ascii"),
+                            cn.encode("ascii"),
                             b", DNS:",
-                            self.commonName.encode("ascii"),
+                            cn.encode("ascii"),
                         ]
                     ),
                 ),

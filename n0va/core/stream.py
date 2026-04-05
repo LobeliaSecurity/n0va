@@ -1,13 +1,143 @@
 import asyncio
+import socket
 import ssl
-import n0va.util.parser
+
+
+class StreamSocketOptions:
+    """TCP ストリーム向けソケットオプション。"""
+
+    @staticmethod
+    def apply_tcp_nodelay(writer) -> None:
+        sock = writer.get_extra_info("socket")
+        if sock is None:
+            return
+        if sock.family not in (socket.AF_INET, socket.AF_INET6):
+            return
+        try:
+            sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+        except OSError:
+            pass
+
+
+class TlsClientHelloParser:
+    """TLS ClientHello レコードと拡張（SNI / ALPN）の解釈。"""
+
+    @staticmethod
+    def extract_extensions(record: bytes) -> bytes:
+        """TLS レコード先頭から ClientHello の extensions ブロックを取り出す。"""
+        if len(record) < 5:
+            raise ValueError("record too short")
+        if record[0] != 22:
+            raise ValueError("not handshake record")
+        rec_len = int.from_bytes(record[3:5], "big")
+        if len(record) < 5 + rec_len:
+            raise ValueError("incomplete record")
+        pos = 5
+        if pos + 4 > len(record):
+            raise ValueError("handshake header")
+        hs_type = record[pos]
+        hs_len = int.from_bytes(record[pos + 1 : pos + 4], "big")
+        pos += 4
+        if hs_type != 1:
+            raise ValueError("not client hello")
+        if pos + hs_len > len(record):
+            raise ValueError("incomplete handshake")
+        end_hs = pos + hs_len
+        if pos + 34 > end_hs:
+            raise ValueError("client hello truncated")
+        pos += 2 + 32
+        sid_len = record[pos]
+        pos += 1
+        if pos + sid_len > end_hs:
+            raise ValueError("session id")
+        pos += sid_len
+        if pos + 2 > end_hs:
+            return b""
+        cs_len = int.from_bytes(record[pos : pos + 2], "big")
+        pos += 2
+        if pos + cs_len > end_hs:
+            raise ValueError("cipher suites")
+        pos += cs_len
+        if pos + 1 > end_hs:
+            return b""
+        comp_len = record[pos]
+        pos += 1
+        if pos + comp_len > end_hs:
+            raise ValueError("compression")
+        pos += comp_len
+        if pos + 2 > end_hs:
+            return b""
+        ext_len = int.from_bytes(record[pos : pos + 2], "big")
+        pos += 2
+        if ext_len == 0:
+            return b""
+        if pos + ext_len > end_hs:
+            raise ValueError("extensions")
+        return record[pos : pos + ext_len]
+
+    @staticmethod
+    def flatten_extensions(ext_block: bytes) -> list:
+        """
+        [type2, len2, payload, ...] のフラット列（ReadserverName / ReadALPN 互換）。
+        """
+        out = []
+        pos = 0
+        n = len(ext_block)
+        while pos + 4 <= n:
+            etype = ext_block[pos : pos + 2]
+            elen_raw = ext_block[pos + 2 : pos + 4]
+            elen = int.from_bytes(elen_raw, "big")
+            pos += 4
+            if pos + elen > n:
+                break
+            payload = ext_block[pos : pos + elen]
+            pos += elen
+            out.extend([etype, elen_raw, payload])
+        return out
+
+    @staticmethod
+    def parse_server_name_hostname(payload: bytes):
+        """extension_data (server_name) から最初の host_name を UTF-8 で返す。"""
+        if len(payload) < 2:
+            return None
+        list_len = int.from_bytes(payload[0:2], "big")
+        pos = 2
+        end = min(len(payload), 2 + list_len)
+        while pos + 3 <= end:
+            name_type = payload[pos]
+            name_len = int.from_bytes(payload[pos + 1 : pos + 3], "big")
+            pos += 3
+            if pos + name_len > end:
+                break
+            host = payload[pos : pos + name_len]
+            pos += name_len
+            if name_type == 0:
+                return host.decode("utf-8")
+        return None
+
+    @staticmethod
+    def parse_alpn_protocol_names(payload: bytes) -> list:
+        """ALPN extension_data。先頭2バイトの次から (1バイト長 + 名) を繰り返し。"""
+        if len(payload) <= 2:
+            return []
+        pos = 2
+        end = len(payload)
+        names = []
+        while pos + 1 <= end:
+            plen = payload[pos]
+            pos += 1
+            if pos + plen > end:
+                break
+            names.append(payload[pos : pos + plen].decode("utf-8"))
+            pos += plen
+        return names
 
 
 class AsyncStream:
     def __init__(self, reader, writer):
         self._Reader = reader
         self._Writer = writer
-        self._Recvsize = 1024 * 4
+        self._Recvsize = 1024 * 64
         self._Timeout = 60.0 * 15
 
     async def Send(self, b):
@@ -42,7 +172,7 @@ class AsyncManualSslStream(AsyncStream):
 
         self._tls_in_buff = ssl.MemoryBIO()
         self._tls_out_buff = ssl.MemoryBIO()
-        self._tls_Readsize = 8
+        self._tls_Readsize = 4096
         self._client_hello_buf = None
 
     async def Send(self, b):
@@ -51,68 +181,58 @@ class AsyncManualSslStream(AsyncStream):
         await asyncio.wait_for(self._Writer.drain(), timeout=self._Timeout)
 
     async def Recv(self, i=0, timeout=0):
-        R = b""
         if i == 0:
             i = self._Recvsize
         if timeout == 0:
             timeout = self._Timeout
         BUF = await asyncio.wait_for(self._Reader.read(i), timeout=timeout)
         self._tls_in_buff.write(BUF)
+        parts = []
         while True:
             try:
-                R += self._tls_obj.read(self._tls_Readsize)
-            except:
+                chunk = self._tls_obj.read(self._tls_Readsize)
+            except ssl.SSLError:
                 break
-        return R
+            if not chunk:
+                break
+            parts.append(chunk)
+        return b"".join(parts)
 
     def ReadserverName(self, ex):
-        R = None
-        exTypes = ex[0::3]
-        exLength = ex[1::3]
-        exBuf = ex[2::3]
-        for i in range(len(exTypes)):
-            if exTypes[i] == b"\x00\x00":
-                return n0va.util.parser.parse(exBuf[i], (2, 1, 2, "b-1"))[-2].decode(
-                    "utf-8"
-                )
-        return R
+        for i in range(0, len(ex), 3):
+            if i + 2 >= len(ex):
+                break
+            if ex[i] == b"\x00\x00":
+                return TlsClientHelloParser.parse_server_name_hostname(ex[i + 2])
+        return None
 
     def ReadALPN(self, ex):
-        R = []
-        exTypes = ex[0::3]
-        exLength = ex[1::3]
-        exBuf = ex[2::3]
-        for i in range(len(exTypes)):
-            if exTypes[i] == b"\x00\x10":
-                tmp = n0va.util.parser.parse(exBuf[i][2:], (1, "b-1"))
-                R.append(tmp[1].decode("utf-8"))
-                while tmp[-1] != None:
-                    tmp = n0va.util.parser.parse(tmp[-1], (1, "b-1"))
-                    R.append(tmp[1].decode("utf-8"))
-        return R
+        for i in range(0, len(ex), 3):
+            if i + 2 >= len(ex):
+                break
+            if ex[i] == b"\x00\x10":
+                return TlsClientHelloParser.parse_alpn_protocol_names(ex[i + 2])
+        return []
 
     async def ParseClientHello(self):
         R = {}
         self._client_hello_buf = await super().Recv()
-        if self._client_hello_buf[0] != 22:
+        if len(self._client_hello_buf) == 0 or self._client_hello_buf[0] != 22:
             self.isTryingHandshake = False
             return None
         self.isTryingHandshake = True
-        R["Parsed"] = n0va.util.parser.parse(
-            self._client_hello_buf,
-            (1, 2, 2, 1, 3, 2, 32, 1, "b-1", 2, "b-1", 1, "b-1", 2),
-        )
-        extensions = [R["Parsed"][-1]]
-        while extensions[-1] != None:
-            extensions = extensions[:-1] + n0va.util.parser.parse(
-                extensions[-1], (2, 2, "b-1")
-            )
-        R["Parsed"][-1] = extensions[:-1]
+        try:
+            ext_block = TlsClientHelloParser.extract_extensions(self._client_hello_buf)
+        except (ValueError, IndexError):
+            R["Parsed"] = [[]]
+            return R
+        flat = TlsClientHelloParser.flatten_extensions(ext_block)
+        R["Parsed"] = [flat]
         return R
 
     async def ReadClientHello(self):
         R = await self.ParseClientHello()
-        if self.isTryingHandshake:
+        if self.isTryingHandshake and R is not None:
             self.serverName = self.ReadserverName(R["Parsed"][-1])
             self.ALPN = self.ReadALPN(R["Parsed"][-1])
 

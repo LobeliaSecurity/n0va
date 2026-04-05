@@ -1,8 +1,11 @@
+import n0va.core.stream
 from n0va.core.server import AsyncTcp
-import traceback
-import hashlib
-import base64
-import io
+from n0va.protocol.http1 import Http1ParseError, Http1RequestParser
+
+from .context import HttpRequest, HttpResponse, RequestContext
+from .router import Router
+from .ws import WebSocketSession
+from .ws_codec import WebSocketHandshake
 
 
 class MediaTypes(dict):
@@ -18,6 +21,7 @@ class MediaTypes(dict):
                 "png": b"image/png",
                 "gif": b"image/gif",
                 "ico": b"image/ico",
+                "webm": b"video/webm",
                 "mp4": b"video/mp4",
                 "mp3": b"audio/mp3",
                 "otf": b"application/x-font-otf",
@@ -41,217 +45,244 @@ MIME = MediaTypes()
 
 
 class server(AsyncTcp):
-    def __init__(self, host, port):
+    def __init__(
+        self,
+        host,
+        port,
+        *,
+        dev_static_cache_control: bytes | None = b"no-store",
+    ):
+        """
+        `dev_static_cache_control`: 組み込み静的ファイル配信（`OnMemoryFiles`）に付ける
+        `Cache-Control`。ローカル開発ではブラウザキャッシュを避ける `no-store` が既定。
+        本番向けの静的配信は別途（リバースプロキシ・オブジェクトストレージ等）を想定し、
+        `None` で無効化もできる。
+        """
         super().__init__(host=host, port=port)
         self.DefaultFile = "/index.html"
-        self.PostFunctions = {}
-        self.GetFunctions = {}
-        self.WebSocketFunctions = {}
+        self.router = Router()
         self.OnMemoryFiles = {}
+        self.dev_static_cache_control = dev_static_cache_control
         self.MIME = MIME
         self._Header = b"\r\n".join(
             (
                 b"HTTP/1.1 %i",
                 b"server: %b",
-                b"Accept-Ranges: %b",
                 b"Content-Length: %i",
                 b"Connection: %b",
                 b"Keep-Alive: %b",
                 b"Content-Type: %b\r\n",
             )
         )
-        self.serverFunctions = {
-            b"GET": self.Get,
-            b"POST": self.Post,
-            b"WebSocket": self.WebSocket,
-        }
         self.ContentLengthLimit = 1024 * 1024 * 3
+        self.MaxHeaderBytes = 32 * 1024
 
-    def NewHeader(self):
-        return {
-            "Status": 0,
-            "server": b"n0va",
-            "Accept-Ranges": b"bytes",
-            "Content-Length": 0,
-            "Connection": b"keep-alive",
-            "Keep-Alive": b"timeout=30, max=100",
-            "Content-Type": b"",
-            "Additional": [],
-            "ReplyContent": b"",
-        }
+    @staticmethod
+    def _normalize_request_target(target: bytes) -> bytes:
+        """:meth:`n0va.protocol.http1.Http1RequestParser.normalize_request_target` への互換エイリアス。"""
+        return Http1RequestParser.normalize_request_target(target)
 
-    async def Reply(self, connection, header):
-        _ReplyBuffer = io.BytesIO()
-        _ReplyBuffer.write(
+    @staticmethod
+    def _to_http_request(d: dict) -> HttpRequest:
+        method = d["method"]
+        raw_path = d["path"]
+        skip = {"method", "path", "content"}
+        headers: dict[str, bytes] = {}
+        for k, v in d.items():
+            if k in skip:
+                continue
+            if isinstance(k, str):
+                headers[k.lower()] = v if isinstance(v, bytes) else str(v).encode()
+        if b"?" in raw_path:
+            path_part, qs = raw_path.split(b"?", 1)
+            path_str = path_part.decode("utf-8")
+            content = qs
+        else:
+            path_str = raw_path.decode("utf-8")
+            content = d.get("content", b"")
+        method_str = method.decode("ascii", "replace").upper()
+        return HttpRequest(
+            method=method,
+            method_str=method_str,
+            path=path_str,
+            raw_path=raw_path,
+            headers=headers,
+            content=content,
+        )
+
+    async def send_http_response(
+        self, connection: n0va.core.stream.AsyncStream, response: HttpResponse
+    ) -> None:
+        rc = response.body
+        parts = [
             self._Header
             % (
-                header["Status"],
-                header["server"],
-                header["Accept-Ranges"],
-                len(header["ReplyContent"]),
-                header["Connection"],
-                header["Keep-Alive"],
-                header["Content-Type"],
+                response.status,
+                response.server,
+                len(rc),
+                response.connection,
+                response.keep_alive,
+                response.content_type,
             )
-        )
-        for a in header["Additional"]:
-            _ReplyBuffer.write(a)
-            _ReplyBuffer.write(b"\r\n")
-        _ReplyBuffer.write(b"\r\n")
-        _ReplyBuffer.write(header["ReplyContent"])
-        _ReplyBuffer.seek(0)
-        await connection.Send(_ReplyBuffer.read())
+        ]
+        if response.cache_control is not None:
+            parts.append(b"Cache-Control: ")
+            parts.append(response.cache_control)
+            parts.append(b"\r\n")
+        for line in response.additional_header_lines:
+            parts.append(line)
+            parts.append(b"\r\n")
+        parts.append(b"\r\n")
+        parts.append(rc)
+        await connection.Send(b"".join(parts))
 
-    async def ReplyJustCode(self, code, connection, Request, ReplyHeader):
-        ReplyHeader["ReplyContent"] = b"%i" % code
-        ReplyHeader["Content-Type"] = b"text/html"
-        ReplyHeader["Status"] = code
-        await self.Reply(connection, ReplyHeader)
+    async def serverFunctionHandler(self, connection, Request):
+        m = Request["method"]
+        if m == b"GET":
+            await self.Get(connection, Request)
+        elif m == b"WebSocket":
+            await self.WebSocket(connection, Request)
+        else:
+            await self.dispatch_http_handler(connection, Request)
 
-    async def WebSockRecv(self, connection):
-        buf = await connection.Recv()
-        if len(buf) == 0 or buf[0] == 0x88:
+    async def GetFunctionHandler(
+        self, connection, Request, ctx: RequestContext
+    ) -> None:
+        await self._invoke_registered_http(connection, ctx)
+
+    async def _invoke_registered_http(
+        self, connection, ctx: RequestContext
+    ) -> bool:
+        handler = self.router.get(ctx.request.method_str, ctx.request.path)
+        if handler is None:
             return False
-        opcode = buf[0] & 0x0F
-        is_Masked = buf[1] >> 7
-        Payload_len = buf[1] & 0x7F
-        Ptr = 2
-        Masking_key = b""
-        Payload_data = b""
-        if Payload_len == 126:
-            # Extended payload length
-            Payload_len = int.from_bytes(buf[2:4], "big")
-            Ptr = 4
-        elif Payload_len == 127:
-            # Extended payload length
-            Payload_len = int.from_bytes(buf[2:10], "big")
-            Ptr = 10
-        Payload_data = buf[Ptr + 4 :]
-        if is_Masked:
-            # Resulut[ i ] ＝ buf[ i ] xor key [ i mod 4 ]
-            Masking_key = buf[Ptr : Ptr + 4]
-            Result = io.BytesIO()
-            for i in range(Payload_len):
-                Result.write((Payload_data[i] ^ Masking_key[i % 4]).to_bytes(1, "big"))
-            Result.seek(0)
-            Payload_data = Result.read()
-        return (opcode, Payload_data)
+        resp = await handler(ctx)
+        if resp is not None:
+            await self.send_http_response(connection, resp)
+        return True
 
-    async def BuildWebSockFrame(self, opcode, payload):
-        payload_len = len(payload)
-        R = io.BytesIO()
-        R.write((0x80 + opcode).to_bytes(1, "big"))
-        if payload_len <= 125:
-            R.write(payload_len.to_bytes(1, "big"))
-        elif payload_len <= 65535:
-            R.write(b"\x7e" + payload_len.to_bytes(2, "big"))
-        elif 65535 < payload_len and payload_len <= 18446744073709551615:
-            R.write(b"\x7f" + payload_len.to_bytes(8, "big"))
-        R.write(payload)
-        R.seek(0)
-        return R.read()
+    async def dispatch_http_handler(self, connection, Request) -> None:
+        ctx = RequestContext(self._to_http_request(Request), connection, self)
+        if not await self._invoke_registered_http(connection, ctx):
+            await self._reply_code(connection, 404)
 
-    async def serverFunctionHandler(self, connection, Request, ReplyHeader):
-        await self.serverFunctions[Request["method"]](connection, Request, ReplyHeader)
+    def _sync_dev_static_files(self, req_path: str) -> None:
+        """サブクラスが `OnMemoryFiles` をディスクと同期する（開発用のフック）。"""
+        pass
 
-    async def GetFunctionHandler(self, connection, Request, ReplyHeader):
-        R = await self.GetFunctions[Request["path"].decode("utf-8")](
-            connection, Request, ReplyHeader
-        )
-        await self.Reply(connection, R)
+    def _take_static_if_present(self, url_path: str):
+        """
+        `url_path` が `OnMemoryFiles` にあり実ファイルが残っていれば `OnMemoryFile` を返す。
+        ディスク上に無ければインデックスから削除して `None`。
+        """
+        if url_path not in self.OnMemoryFiles:
+            return None
+        of = self.OnMemoryFiles[url_path]
+        if not of.exists():
+            del self.OnMemoryFiles[url_path]
+            return None
+        return of
 
-    async def PostFunctionHandler(self, connection, Request, ReplyHeader):
-        R = await self.PostFunctions[Request["path"].decode("utf-8")](
-            connection, Request, ReplyHeader
-        )
-        await self.Reply(connection, R)
-
-    async def WebSocketFunctionHandler(self, connection, Request, ReplyHeader):
-        await self.WebSocketFunctions[Request["path"].decode("utf-8")](
-            connection, Request, ReplyHeader
-        )
-
-    async def Get(self, connection, Request, ReplyHeader):
+    async def Get(self, connection, Request):
         if Request["path"] == b"/":
             Request["path"] = self.DefaultFile.encode("utf-8")
-        elif Request["path"][:2] == b"/?":
+        elif len(Request["path"]) >= 2 and Request["path"][:2] == b"/?":
             Request["path"] = self.DefaultFile.encode("utf-8") + Request["path"][1:]
         ReqPath = Request["path"].decode("utf-8")
-        if ReqPath in self.OnMemoryFiles:
-            ReplyHeader["ReplyContent"] = self.OnMemoryFiles[ReqPath].data
-            ReplyHeader["Content-Type"] = self.OnMemoryFiles[ReqPath].mime
-            ReplyHeader["Status"] = 200
-            await self.Reply(connection, ReplyHeader)
-        elif ReqPath in self.GetFunctions:
-            Request.update({"content": b""})
-            await self.GetFunctionHandler(connection, Request, ReplyHeader)
-        elif "?" in ReqPath:
-            data = Request["path"].split(b"?")
-            Request["path"] = data[0]
-            Request.update({"content": data[1]})
-            if Request["path"].decode("utf-8") in self.GetFunctions:
-                await self.GetFunctionHandler(connection, Request, ReplyHeader)
+        path_route = ReqPath.split("?", 1)[0] if "?" in ReqPath else ReqPath
+
+        if self.router.get("GET", path_route) is not None:
+            if "?" in ReqPath:
+                data = Request["path"].split(b"?", 1)
+                Request["path"] = data[0]
+                Request.update({"content": data[1] if len(data) > 1 else b""})
             else:
-                await self.ReplyJustCode(404, connection, Request, ReplyHeader)
-        else:
-            await self.ReplyJustCode(404, connection, Request, ReplyHeader)
+                Request.update({"content": b""})
+            ctx = RequestContext(self._to_http_request(Request), connection, self)
+            await self.GetFunctionHandler(connection, Request, ctx)
+            return
 
-    async def Post(self, connection, Request, ReplyHeader):
-        ReqPath = Request["path"].decode("utf-8")
-        if ReqPath in self.PostFunctions:
-            await self.PostFunctionHandler(connection, Request, ReplyHeader)
-        else:
-            await self.ReplyJustCode(404, connection, Request, ReplyHeader)
+        self._sync_dev_static_files(path_route)
 
-    async def WebSocket(self, connection, Request, ReplyHeader):
-        m = hashlib.sha1()
-        m.update(Request["Sec-WebSocket-Key"])
-        m.update(b"258EAFA5-E914-47DA-95CA-C5AB0DC85B11")
+        of = self._take_static_if_present(path_route)
+        if of is not None:
+            if "?" in ReqPath:
+                data = Request["path"].split(b"?", 1)
+                Request["path"] = data[0]
+                Request.update({"content": data[1] if len(data) > 1 else b""})
+            else:
+                Request.update({"content": b""})
+            await self.send_http_response(
+                connection,
+                HttpResponse(
+                    status=200,
+                    body=of.data,
+                    content_type=of.mime,
+                    cache_control=self.dev_static_cache_control,
+                ),
+            )
+            return
+
+        await self._reply_code(connection, 404)
+
+    async def _reply_code(self, connection, code: int) -> None:
+        await self.send_http_response(
+            connection,
+            HttpResponse(
+                status=code,
+                body=b"%i" % code,
+                content_type=b"text/html",
+            ),
+        )
+
+    async def WebSocket(self, connection, Request):
+        accept = WebSocketHandshake.sec_websocket_accept(Request["Sec-WebSocket-Key"])
         await connection.Send(
             b"".join(
                 (
                     b"HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ",
-                    base64.b64encode(m.digest()),
+                    accept,
                     b"\r\n\r\n",
                 )
             )
         )
-        await self.WebSocketFunctionHandler(connection, Request, ReplyHeader)
+        ctx = RequestContext(self._to_http_request(Request), connection, self)
+        handler = self.router.get("WEBSOCKET", ctx.request.path)
+        session = WebSocketSession(connection, ctx.state)
+        if handler is not None:
+            await handler(session, ctx)
 
     async def Handler(self, connection):
         try:
+            pending = b""
             while not connection._Writer.is_closing():
-                h = self.NewHeader()
-                Request = {}
-                buf = await connection.Recv()
-                if len(buf) == 0:
-                    await connection.Close()
-                    return
-                while buf.find(b"\r\n\r\n") == -1:
-                    buf += await connection.Recv()
-                Request = {}
-                body_pointer = buf.find(b"\r\n\r\n")
-                headers = buf[:body_pointer].split(b"\r\n")
-                request = headers[0].split(b" ")
-                Request.update({"method": request[0]})
-                Request.update({"path": request[1]})
-                try:
-                    for param in headers[1:]:
-                        p = param.split(b": ")
-                        Request.update({p[0].decode("utf-8"): p[1]})
-                except:
-                    pass
-                if "Upgrade" in Request and Request["Upgrade"] == b"websocket":
-                    Request["method"] = b"WebSocket"
-                elif "Content-Length" in Request:
-                    body = buf[body_pointer + 4 :]
-                    if self.ContentLengthLimit < int(Request["Content-Length"]):
+                buf = pending
+                pending = b""
+                while True:
+                    try:
+                        req = Http1RequestParser.parse(
+                            buf,
+                            max_header_bytes=self.MaxHeaderBytes,
+                            max_body_bytes=self.ContentLengthLimit,
+                        )
+                    except Http1ParseError:
                         await connection.Close()
                         return
-                    while len(body) < int(Request["Content-Length"]):
-                        body += await connection.Recv()
-                    Request.update({"content": body})
-                await self.serverFunctionHandler(connection, Request, h)
+                    if req is not None:
+                        break
+                    chunk = await connection.Recv()
+                    if len(chunk) == 0:
+                        await connection.Close()
+                        return
+                    buf += chunk
+                    if len(buf) > self.MaxHeaderBytes + self.ContentLengthLimit:
+                        await connection.Close()
+                        return
+                Request = Http1RequestParser.to_server_request_dict(req)
+                if "Upgrade" in Request and Request.get("Upgrade") == b"websocket":
+                    Request["method"] = b"WebSocket"
+                pending = buf[req.consumed :]
+                await self.serverFunctionHandler(connection, Request)
         except Exception as e:
             await connection.Close()
             raise e
