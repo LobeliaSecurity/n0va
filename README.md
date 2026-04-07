@@ -10,11 +10,14 @@
 
 Not a replacement for production edge proxies, CDNs, or large HTTP frameworks.
 
+**Dual-use tooling:** Gate plus a **locally trusted CA** can behave like **TLS inspection** on an endpoint (same *shape* as corporate HTTPS monitoring on managed devices). That power is documented under [**Security research, dual-use tooling, and LobeliaSecurity**](#security-research-dual-use-tooling-and-lobeliasecurity)—use n0va **only** where you have **clear authorization**.
+
 ---
 
 ## Contents
 
 - [Highlights](#highlights)
+- [Security research, dual-use tooling, and LobeliaSecurity](#security-research-dual-use-tooling-and-lobeliasecurity)
 - [At a glance](#at-a-glance)
 - [When to use (and not)](#when-to-use-and-not)
 - [Install](#install)
@@ -36,12 +39,23 @@ Not a replacement for production edge proxies, CDNs, or large HTTP frameworks.
 | **HTTP routing**     | **`HttpRoutingGateService`** — route by host/path (and related rules) so **arbitrary endpoints** can hit **localhost**, a **mock**, or a **real** upstream as you choose. |
 | **HTTP / WebSocket** | Small **`n0va.Service`** for routes, static files for **dev**, optional TLS — fine for demos and internal tools.                                                          |
 | **Dashboard**        | Manage Gate config, CAs, issued certs, and helpers from the browser (`python dashboard/run.py` after building the frontend).                                              |
+| **TCP + TLS proxying** | With a **custom root** trusted on the client, Gate can sit **in the middle** of TLS—terminate, inspect or reshape, and re-encrypt—**analogous in principle** to enterprise endpoint HTTPS inspection. The same pattern underpins **authorized** research and **Red Team** tooling; it can also be **misused** (see below). |
+
+---
+
+## Security research, dual-use tooling, and LobeliaSecurity
+
+**What Gate can do (technical):** as a **TCP proxy** with **TLS termination** (and optional forwarding to an upstream, plain or TLS), n0va can expose **cleartext or structured HTTP** to your code after the client has completed TLS to *you*. When the client trusts a **root CA you control** (e.g. one you issue from the dashboard), that trust model matches how **managed endpoints** allow **corporate TLS inspection**: the user or organization installs a **root**, and the proxy can present **names that validate under that PKI**. That is why the feature set is **stronger than “a local HTTPS dev server”**: it is the same class of capability security teams use to **observe and modify** protocol traffic under policy.
+
+**Misuse (explicit):** those mechanics also lower friction for **abusive** scenarios—e.g. **phishing** sites (including **look-alike domains** and **social engineering**) combined with a **user-installed** trust anchor. **LobeliaSecurity does not condone** phishing, fraud, unauthorized surveillance, or interception. Use n0va **only on systems and networks you own or are explicitly authorized to test**, and in compliance with **applicable law** and **organizational rules**.
+
+**About LobeliaSecurity:** **LobeliaSecurity** builds software that is **ordinary and benign** in typical lab and engineering use, but whose primitives overlap **offensive security** and **Red Team** tradecraft (transparent proxies, custom PKI, routing). This repository is published with that **dual-use** reality in mind; capability descriptions are **not** an endorsement of harmful use.
 
 ---
 
 ## At a glance
 
-![n0va Gater overview](docs/images/flowchart.png)
+![n0va Gate overview](docs/images/flowchart.png)
 
 ![n0va dashboard — Gate and certificates](docs/images/readme-dashboard.png)
 
