@@ -32,6 +32,18 @@ class Http1Request:
     """クエリを除いたパス部分。"""
 
 
+@dataclass(frozen=True)
+class Http1Response:
+    """単一の HTTP/1.x レスポンスメッセージ（ゲートが 1 往復の境界を検出するため）。"""
+
+    http_version: bytes
+    status_code: int
+    reason: bytes
+    headers: Mapping[str, bytes]
+    body: bytes
+    consumed: int
+
+
 class Http1RequestParser:
     """
     HTTP/1.x リクエストのバイト列解析と、既存ハンドラ向けの辞書変換。
@@ -280,3 +292,111 @@ class Http1RequestParser:
         for k, v in req.headers.items():
             d[k] = v
         return d
+
+
+class Http1ResponseParser:
+    """
+    HTTP/1.x レスポンスのバイト列解析（1 メッセージ境界の検出）。
+
+    ``HEAD`` や 204 / 304 などボディ無し、``Content-Length``、chunked に対応する。
+    ボディ長が決まらない場合はヘッダ直後までを 1 メッセージとみなす（ボディ無し）。
+    """
+
+    @staticmethod
+    def _status_line_and_headers_from_head(head: bytes) -> tuple[bytes, dict[str, bytes]]:
+        lines = head.split(b"\r\n")
+        if not lines:
+            raise Http1ParseError("bad message")
+        status_line = lines[0]
+        field_lines = lines[1:]
+        while field_lines and field_lines[-1] == b"":
+            field_lines.pop()
+        return status_line, Http1RequestParser._parse_field_line_list(field_lines)
+
+    @staticmethod
+    def parse(
+        data: bytes,
+        *,
+        request_method: bytes = b"GET",
+        max_header_bytes: int = 32 * 1024,
+        max_body_bytes: int = 3 * 1024 * 1024,
+    ) -> Http1Response | None:
+        """
+        ``data`` 先頭から 1 レスポンス分を解釈する。
+
+        ``request_method`` は対応するリクエストのメソッド（``HEAD`` のボディ抑制に使用）。
+        """
+        if not data:
+            return None
+        hend = Http1RequestParser._header_section_end(
+            data, min(len(data), max_header_bytes + 4)
+        )
+        if hend == -1:
+            if len(data) >= max_header_bytes:
+                raise Http1ParseError("headers too large")
+            return None
+        if hend + 2 > max_header_bytes:
+            raise Http1ParseError("headers too large")
+        header_end_exclusive = hend + 4
+        head = data[: hend + 2]
+        status_line, headers = Http1ResponseParser._status_line_and_headers_from_head(head)
+        parts = status_line.split(None, 2)
+        if len(parts) < 2:
+            raise Http1ParseError("bad status line")
+        http_version = parts[0]
+        if not http_version.startswith(b"HTTP/"):
+            raise Http1ParseError("bad HTTP-Version")
+        ver_rest = http_version[5:]
+        if (
+            len(ver_rest) != 3
+            or ver_rest[0] not in b"01"
+            or ver_rest[1] != 46
+            or ver_rest[2] not in b"01"
+        ):
+            raise Http1ParseError("unsupported HTTP version")
+        status_str = parts[1]
+        if len(status_str) != 3 or not status_str.isdigit():
+            raise Http1ParseError("bad status")
+        status_code = int(status_str)
+        reason = parts[2] if len(parts) > 2 else b""
+
+        body_start = header_end_exclusive
+        body: bytes
+        consumed: int
+
+        rm = request_method.upper()
+        if rm == b"HEAD":
+            body = b""
+            consumed = body_start
+        elif 100 <= status_code < 200:
+            body = b""
+            consumed = body_start
+        elif status_code == 204 or status_code == 304:
+            body = b""
+            consumed = body_start
+        elif Http1RequestParser._transfer_encoding_chunked(headers):
+            got = Http1RequestParser._parse_chunked_body(data, body_start, max_body_bytes)
+            if got is None:
+                return None
+            body, consumed = got
+        else:
+            cl = Http1RequestParser._content_length(headers)
+            if cl is not None:
+                if cl > max_body_bytes:
+                    raise Http1ParseError("body too large")
+                if len(data) < body_start + cl:
+                    return None
+                body = data[body_start : body_start + cl]
+                consumed = body_start + cl
+            else:
+                body = b""
+                consumed = body_start
+
+        return Http1Response(
+            http_version=http_version,
+            status_code=status_code,
+            reason=reason,
+            headers=headers,
+            body=body,
+            consumed=consumed,
+        )

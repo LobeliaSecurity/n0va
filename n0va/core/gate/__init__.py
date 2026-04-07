@@ -8,7 +8,6 @@ from .config import (
     Route,
     Upstream,
     UpstreamTls,
-    validate_gate_config,
 )
 from .http_dispatch import (
     AsyncStreamPrefix,
@@ -17,6 +16,11 @@ from .http_dispatch import (
     HttpRoutingGateService,
 )
 from .service import GateService
+from .upstream_pool import UpstreamConnectionPool
+
+# 後方互換・短い名前（パッケージ公開 API）
+upstream_pool_key = UpstreamConnectionPool.key_for
+transient_upstream_error = UpstreamConnectionPool.transient_error
 
 __all__ = [
     "AsyncStreamPrefix",
@@ -32,6 +36,8 @@ __all__ = [
     "LoadBalanceStrategy",
     "Route",
     "Upstream",
+    "UpstreamConnectionPool",
     "UpstreamTls",
-    "validate_gate_config",
+    "transient_upstream_error",
+    "upstream_pool_key",
 ]

@@ -1,7 +1,14 @@
 from .context import HttpRequest, HttpResponse, RequestContext
+from .http import MediaTypes, server
 from .router import Router
 from .ws import WebSocketSession
-from .http import server, MIME, MediaTypes
+
+
+def __getattr__(name: str):
+    if name == "MIME":
+        return MediaTypes.shared()
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
 
 __all__ = [
     "HttpRequest",

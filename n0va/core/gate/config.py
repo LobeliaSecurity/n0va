@@ -96,26 +96,25 @@ class GateConfig:
     entrance: Union[EntrancePlain, EntranceTlsSni, EntranceTlsManual]
     routes: Mapping[str, Route]
 
+    def validate(self) -> None:
+        if not self.routes:
+            raise ValueError("routes must not be empty")
+        for key, route in self.routes.items():
+            if not isinstance(route, Route):
+                raise TypeError(f"route {key!r} must be a Route instance (subclass)")
+        if isinstance(self.entrance, EntrancePlain):
+            dr = self.entrance.default_route
+            if dr not in self.routes:
+                raise ValueError(f"default_route {dr!r} not in routes")
+        elif isinstance(self.entrance, (EntranceTlsSni, EntranceTlsManual)):
+            for hostname in self.entrance.sni_contexts:
+                if hostname not in self.routes:
+                    raise ValueError(
+                        f"SNI host {hostname!r} has no matching route in routes"
+                    )
+            self._attach_sni_labels(self.entrance)
 
-def _attach_sni_labels(entrance: Union[EntranceTlsSni, EntranceTlsManual]) -> None:
-    for hostname, ctx in entrance.sni_contexts.items():
-        setattr(ctx, "DomainName", hostname)
-
-
-def validate_gate_config(config: GateConfig) -> None:
-    if not config.routes:
-        raise ValueError("routes must not be empty")
-    for key, route in config.routes.items():
-        if not isinstance(route, Route):
-            raise TypeError(f"route {key!r} must be a Route instance (subclass)")
-    if isinstance(config.entrance, EntrancePlain):
-        dr = config.entrance.default_route
-        if dr not in config.routes:
-            raise ValueError(f"default_route {dr!r} not in routes")
-    elif isinstance(config.entrance, (EntranceTlsSni, EntranceTlsManual)):
-        for hostname in config.entrance.sni_contexts:
-            if hostname not in config.routes:
-                raise ValueError(
-                    f"SNI host {hostname!r} has no matching route in routes"
-                )
-        _attach_sni_labels(config.entrance)
+    @staticmethod
+    def _attach_sni_labels(entrance: Union[EntranceTlsSni, EntranceTlsManual]) -> None:
+        for hostname, ctx in entrance.sni_contexts.items():
+            setattr(ctx, "DomainName", hostname)

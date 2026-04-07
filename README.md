@@ -1,16 +1,64 @@
 # n0va
 
-**n0va** is a small **asyncio** toolkit for Python 3.10+: a lightweight **HTTP/1.1** server, a **TCP proxy (“Gate”)** you can observe and extend, and an optional **dashboard** for local ops. Built for prototypes, labs, and dev workflows—not a replacement for large production frontends or CDNs.
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Python](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
+[![Tests](https://img.shields.io/badge/tests-pytest-0A9EDC.svg)](pytest.ini)
 
-**License:** [MIT](LICENSE)
+**Asyncio toolkit** for local dev and tooling: a programmable **Gate** (TCP / TLS / HTTP-aware proxy), **certificate utilities** (CA and issued certs), an optional **dashboard**, plus a small **HTTP/1.1** app surface.
+
+> **Where it shines in practice:** combine **Gate** with **locally issued TLS** so you can run a convincing **HTTPS environment on your machine** without wrestling your production stack. **HTTP routing** lets you send some paths to a local stub and **others to real backends**—so you can iterate on one feature while still talking to the rest of the system.
+
+Not a replacement for production edge proxies, CDNs, or large HTTP frameworks.
 
 ---
 
-## Why n0va?
+## Contents
 
-- **Gate — inspect traffic without giving up transparency.** Forward TCP end-to-end, terminate TLS when you need to, route by SNI or HTTP, load-balance upstreams, and hook **bidirectional streams** to log or reshape bytes—useful for debugging, security research, and custom routing.
-- **Simple HTTP & WebSocket surface.** Decorate routes, serve static files for **local dev**, optional TLS—enough to ship a demo or internal tool quickly.
-- **Optional dashboard.** Manage Gate configs, certificates, and a few helper utilities from the browser when you want a UI instead of only code.
+- [Highlights](#highlights)
+- [At a glance](#at-a-glance)
+- [When to use (and not)](#when-to-use-and-not)
+- [Install](#install)
+- [Local HTTPS: Gate + certificates](#local-https-gate--certificates)
+- [Quick start (HTTP server)](#quick-start-http-server)
+- [Dashboard](#dashboard)
+- [Tests](#tests)
+- [Environment variables](#environment-variables)
+- [Repository layout](#repository-layout)
+
+---
+
+## Highlights
+
+| Area                 | What you get                                                                                                                                                              |
+| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Gate + TLS**       | Terminate TLS (manual certs or **SNI**), forward plain or TLS upstreams, **load-balance** upstream pools, observe or hook **bidirectional** traffic.                      |
+| **Certificates**     | **CA** and **server cert** workflows used by the dashboard (stored under your data root); trust the CA locally for browser-friendly HTTPS.                                |
+| **HTTP routing**     | **`HttpRoutingGateService`** — route by host/path (and related rules) so **arbitrary endpoints** can hit **localhost**, a **mock**, or a **real** upstream as you choose. |
+| **HTTP / WebSocket** | Small **`n0va.Service`** for routes, static files for **dev**, optional TLS — fine for demos and internal tools.                                                          |
+| **Dashboard**        | Manage Gate config, CAs, issued certs, and helpers from the browser (`python dashboard/run.py` after building the frontend).                                              |
+
+---
+
+## At a glance
+
+![n0va Gater overview](docs/images/flowchart.png)
+
+![n0va dashboard — Gate and certificates](docs/images/readme-dashboard.png)
+
+---
+
+## When to use (and not)
+
+**Good fit**
+
+- Local **HTTPS** that behaves like production (cookies, HSTS-oriented flows, mixed origins) with **your own CA**.
+- **Split routing**: e.g. `/api/new` → local service, everything else → **staging** or **production** (with appropriate caution).
+- **Debugging** and **security research** on real protocol bytes through a Gate you control.
+
+**Poor fit**
+
+- Internet-facing production **edge** or **global scale** (use a mature proxy / cloud edge).
+- Heavy **static hosting** or **CDN** workloads (serve them with the right tool; n0va’s static path is **dev-oriented**).
 
 ---
 
@@ -20,11 +68,21 @@
 pip install git+https://github.com/LobeliaSecurity/n0va.git
 ```
 
-Requires **Python ≥ 3.10** and `pyOpenSSL` (see `setup.py`).
+Requires **Python ≥ 3.10** and **`pyOpenSSL`** (see `setup.py`).
 
 ---
 
-## Quick start (HTTP)
+## Local HTTPS: Gate + certificates
+
+1. **Trust model:** create or import a **CA**, issue **server certificates** for the hostnames you use locally (the optional **dashboard** drives this flow and stores material under `<N0VA_DASHBOARD_DATA>/.n0va/` by default).
+2. **Gate:** define **entrances** (plain TLS, **SNI**, or manual cert) and **upstreams**; use **`HttpRoutingGateService`** when you need **path/host-based** rules so only the routes you want go to **real** services.
+3. **Code:** building blocks live under **`n0va.core.gate`** — e.g. `GateService`, `HttpRoutingGateService`, `GateConfig`, entrances, routes, and **`UpstreamConnectionPool`**.
+
+Programmatic config can be built with the same structures the dashboard uses (see `dashboard/gate_builder.py` for reference mappings from JSON-like dicts to `GateConfig`).
+
+---
+
+## Quick start (HTTP server)
 
 ```python
 import pathlib
@@ -51,32 +109,64 @@ async def hello(ctx: n0va.RequestContext) -> n0va.HttpResponse:
 service.Start()
 ```
 
-More patterns (WebSocket, routing, Gate) live under **`example/`** and **`gate_sample.py`**.
+`n0va.Service` also accepts optional **`dev_static_cache_control`** and **`dev_static_rescan_interval`** for dev static serving (see `n0va/__init__.py`).
+
+More patterns (WebSocket, routing) live under **`example/`**.
 
 ---
 
-## Dashboard (optional)
+## Dashboard
 
-Build the frontend, then from the repo root run `python dashboard/run.py`. By default the app listens on **`127.0.0.1:8765`** and serves REST under **`/api/v1/`**. Use `N0VA_DASHBOARD_DATA` to change where persistent data is rooted.
+Build the Vite frontend, then start the app from the **repository root**:
+
+```bash
+cd dashboard/frontend
+npm install
+npm run build
+cd ../..
+python dashboard/run.py
+```
+
+Defaults: **`127.0.0.1:8765`**, REST under **`/api/v1/`**. Persistent data defaults to **`<cwd>/.n0va/`**; override the base with **`N0VA_DASHBOARD_DATA`** (see below).
 
 ---
 
-## Environment hints
+## Tests
 
-| Variable | Purpose |
-| -------- | ------- |
-| `N0VA_NO_SUPERVISE` | Disable parent/child supervision; run as a single process |
-| `N0VA_DASHBOARD_DATA` | Base path for dashboard data (see dashboard docs / `.n0va/` layout) |
-| `N0VA_GATE_VERBOSE` | Extra logging for Gate samples (e.g. `1`) |
+```bash
+pytest
+```
+
+(`python -m pytest` also works.) Config: **`pytest.ini`** (`testpaths = tests`).
+
+---
+
+## Environment variables
+
+| Variable              | Purpose                                                                                            |
+| --------------------- | -------------------------------------------------------------------------------------------------- |
+| `N0VA_NO_SUPERVISE`   | Disable parent/child supervision; single process (or use `Service.Start(supervised=False)`).       |
+| `N0VA_DASHBOARD_DATA` | Base directory for dashboard data; SQLite and CA material live under `<base>/.n0va/`.              |
+| `N0VA_HOSTS_PATH`     | Optional **hosts file** path for dashboard features that edit hosts (set **before** server start). |
+
+Internal: **`N0VA_SUPERVISED_CHILD`** is set by the supervisor for the child process — do not set manually.
 
 ---
 
 ## Repository layout
 
-| Path | Role |
-| ---- | ---- |
-| `n0va/` | Core library |
-| `dashboard/` | Web UI + API |
-| `example/` | App examples |
+| Path           | Role                                                 |
+| -------------- | ---------------------------------------------------- |
+| `n0va/`        | Core library (Gate, HTTP handler, protocol, certs)   |
+| `dashboard/`   | Web UI + API                                         |
+| `example/`     | Sample HTTP app                                      |
+| `tests/`       | Pytest suite                                         |
+| `docs/images/` | Optional README assets (e.g. `readme-dashboard.png`) |
 
-Built-in static file serving is meant for **development**; use your own stack for heavy production traffic.
+Style notes for the **`n0va/`** package: **`CONTRIBUTING.md`**.
+
+Built-in static file serving targets **development**; use an appropriate stack for heavy production traffic.
+
+---
+
+![](https://repository-images.githubusercontent.com/609695883/30425d66-cee8-461e-a0e6-56aee2f7af1f)

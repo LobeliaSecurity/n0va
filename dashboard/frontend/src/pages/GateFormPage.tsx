@@ -170,7 +170,22 @@ export function GateFormPage() {
       if (patch.hostname !== undefined) {
         const newHost = patch.hostname.trim();
         if (oldHost && oldHost !== newHost) {
-          routes = m.routes.map((r) => (r.routeKey === oldHost ? { ...r, routeKey: newHost } : r));
+          routes = m.routes.map((r) =>
+            r.routeKey.trim() === oldHost ? { ...r, routeKey: newHost } : r,
+          );
+        } else if (!oldHost && newHost) {
+          // 空にしたあと oldHost が "" のまま再入力すると、上の分岐に入らず routeKey が "" のまま残る
+          const emptyRoutes = m.routes.filter((r) => !r.routeKey.trim());
+          if (emptyRoutes.length === 1) {
+            routes = m.routes.map((r) => (!r.routeKey.trim() ? { ...r, routeKey: newHost } : r));
+          } else if (
+            emptyRoutes.length > 1 &&
+            index < m.routes.length &&
+            !m.routes[index].routeKey.trim()
+          ) {
+            // 複数 SNI を順に空にしたとき空ルートが複数になる。行ごとに route[index] を埋める
+            routes = m.routes.map((r, i) => (i === index ? { ...r, routeKey: newHost } : r));
+          }
         }
       }
       return { ...m, sniRows, routes };
@@ -787,13 +802,14 @@ export function GateFormPage() {
                           {(() => {
                             const opts = routeKeySelectOptions(route.routeKey, sniHostOptions);
                             const rk = route.routeKey.trim();
-                            const selectedKey =
-                              opts.length === 0 ? null : opts.includes(rk) ? rk : opts[0];
+                            // routeKey が空なのに opts[0] を仮選択すると見た目だけ選ばれ、onSelectionChange が
+                            // 発火せず検証エラーが消えない。空のときはプレースホルダーのみにする。
+                            const selectedKey = opts.length === 0 || !rk ? undefined : rk;
                             return (
                               <Select.Root
                                 id={`gate-route-key-${ri}`}
                                 fullWidth
-                                selectedKey={selectedKey ?? undefined}
+                                selectedKey={selectedKey}
                                 onSelectionChange={(key) => {
                                   if (key) updateRoute(ri, { routeKey: String(key) });
                                 }}
@@ -863,47 +879,51 @@ export function GateFormPage() {
                             key={`up-${ri}-${ui}`}
                             className="rounded-lg border border-indigo-100/80 bg-slate-50/90 p-3 ring-1 ring-slate-100/60"
                           >
-                            <div className="grid gap-3 lg:grid-cols-12 lg:items-end">
-                              <div className="lg:col-span-3">
+                            <div className="grid min-w-0 gap-3 sm:grid-cols-2 lg:grid-cols-12 lg:items-end">
+                              <div className="min-w-0 sm:col-span-1 lg:col-span-3">
                                 <span className="mb-1 block text-xs font-medium text-slate-600">{t("common.host")}</span>
                                 <Input.Root
+                                  className="w-full min-w-0"
                                   value={up.host}
                                   onChange={(e) => updateUpstream(ri, ui, { host: e.target.value })}
                                   disabled={formDisabled}
                                 />
                               </div>
-                              <div className="lg:col-span-2">
+                              <div className="min-w-0 sm:col-span-1 lg:col-span-2">
                                 <span className="mb-1 block text-xs font-medium text-slate-600">{t("common.port")}</span>
                                 <Input.Root
+                                  className="w-full min-w-0"
                                   value={up.port}
                                   onChange={(e) => updateUpstream(ri, ui, { port: e.target.value })}
                                   disabled={formDisabled}
                                   inputMode="numeric"
                                 />
                               </div>
-                              <div className="lg:col-span-4">
+                              <div className="min-w-0 sm:col-span-2 lg:col-span-4">
                                 <span className="mb-1 block text-xs font-medium text-slate-600">
                                   {t("gateForm.sections.upstreamTlsSni")}
                                 </span>
                                 <Input.Root
+                                  className="w-full min-w-0"
                                   value={up.tlsServerHostname}
                                   onChange={(e) => updateUpstream(ri, ui, { tlsServerHostname: e.target.value })}
                                   disabled={formDisabled}
                                   placeholder={t("gateForm.sections.upstreamTlsPlaceholder")}
                                 />
                               </div>
-                              <div className="lg:col-span-2">
+                              <div className="min-w-0 sm:col-span-2 lg:col-span-2">
                                 <span className="mb-1 block text-xs font-medium text-slate-600">
                                   {t("gateForm.sections.alpn")}
                                 </span>
                                 <Input.Root
+                                  className="w-full min-w-0"
                                   value={up.tlsAlpn}
                                   onChange={(e) => updateUpstream(ri, ui, { tlsAlpn: e.target.value })}
                                   disabled={formDisabled}
                                   placeholder="h2, http/1.1"
                                 />
                               </div>
-                              <div className="flex justify-end lg:col-span-1">
+                              <div className="flex min-w-0 justify-end sm:col-span-2 lg:col-span-1">
                                 <Button
                                   size="sm"
                                   variant="secondary"

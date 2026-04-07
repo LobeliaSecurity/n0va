@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import n0va.core.stream
 from n0va.core.server import AsyncTcp
 from n0va.protocol.http1 import Http1ParseError, Http1RequestParser
@@ -9,7 +11,9 @@ from .ws_codec import WebSocketHandshake
 
 
 class MediaTypes(dict):
-    def __init__(self):
+    _shared: MediaTypes | None = None
+
+    def __init__(self) -> None:
         super().__init__(
             {
                 "txt": b"text/plain",
@@ -34,14 +38,17 @@ class MediaTypes(dict):
             }
         )
 
+    @classmethod
+    def shared(cls) -> MediaTypes:
+        if cls._shared is None:
+            cls._shared = cls()
+        return cls._shared
+
     def __getitem__(self, key):
         if key in self:
             return super().__getitem__(key)
         else:
             return b"application/octet-stream"
-
-
-MIME = MediaTypes()
 
 
 class server(AsyncTcp):
@@ -63,7 +70,7 @@ class server(AsyncTcp):
         self.router = Router()
         self.OnMemoryFiles = {}
         self.dev_static_cache_control = dev_static_cache_control
-        self.MIME = MIME
+        self.MIME = MediaTypes.shared()
         self._Header = b"\r\n".join(
             (
                 b"HTTP/1.1 %i",
@@ -150,9 +157,7 @@ class server(AsyncTcp):
     ) -> None:
         await self._invoke_registered_http(connection, ctx)
 
-    async def _invoke_registered_http(
-        self, connection, ctx: RequestContext
-    ) -> bool:
+    async def _invoke_registered_http(self, connection, ctx: RequestContext) -> bool:
         handler = self.router.get(ctx.request.method_str, ctx.request.path)
         if handler is None:
             return False
@@ -183,7 +188,27 @@ class server(AsyncTcp):
             return None
         return of
 
+    @staticmethod
+    def _path_route_str(raw_target: bytes) -> str:
+        """request-target からクエリを除いたパス（ルータキー用）。"""
+        path_part = raw_target.split(b"?", 1)[0]
+        return path_part.decode("utf-8", "replace") or "/"
+
     async def Get(self, connection, Request):
+        raw = Request["path"]
+        # ルータに登録されたパスを、/ → index.html 寄せより優先する
+        route_key = self._path_route_str(raw)
+        if self.router.get("GET", route_key) is not None:
+            if b"?" in raw:
+                path_bytes, qs = raw.split(b"?", 1)
+                Request["path"] = path_bytes
+                Request.update({"content": qs})
+            else:
+                Request.update({"content": b""})
+            ctx = RequestContext(self._to_http_request(Request), connection, self)
+            await self.GetFunctionHandler(connection, Request, ctx)
+            return
+
         if Request["path"] == b"/":
             Request["path"] = self.DefaultFile.encode("utf-8")
         elif len(Request["path"]) >= 2 and Request["path"][:2] == b"/?":

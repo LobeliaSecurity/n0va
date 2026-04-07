@@ -12,7 +12,6 @@ from .config import (
     LoadBalanceStrategy,
     Route,
     Upstream,
-    validate_gate_config,
 )
 
 
@@ -23,7 +22,7 @@ class GateService:
     """
 
     def __init__(self, config: GateConfig) -> None:
-        validate_gate_config(config)
+        config.validate()
         self._config = config
         self._generation = 0
         self._lock = asyncio.Lock()
@@ -48,7 +47,7 @@ class GateService:
     async def apply_routing(self, config: GateConfig) -> None:
         """ルーティングと入口定義を置き換える（新規接続から有効）。"""
         async with self._lock:
-            validate_gate_config(config)
+            config.validate()
             self._config = config
             self._generation += 1
             self._rebuild_lb()
@@ -121,13 +120,17 @@ class GateService:
         return ctx
 
     def _sni_callback(self, ssl_sock, server_name, ssl_ctx):
+        """
+        OpenSSL の SNI コールバック。失敗時は :exc:`ssl.SSLError` を投げる必要がある。
+        ``ssl.ALERT_DESCRIPTION_*`` は整数であり例外ではない（``raise`` すると TypeError）。
+        """
+        cfg = self._config
+        if not isinstance(cfg.entrance, EntranceTlsSni):
+            raise ssl.SSLError("TLS entrance is not EntranceTlsSni")
         try:
-            cfg = self._config
-            if not isinstance(cfg.entrance, EntranceTlsSni):
-                raise ssl.ALERT_DESCRIPTION_HANDSHAKE_FAILURE
             ssl_sock.context = cfg.entrance.sni_contexts[server_name]
-        except Exception:
-            raise ssl.ALERT_DESCRIPTION_HANDSHAKE_FAILURE
+        except KeyError as e:
+            raise ssl.SSLError(f"unknown SNI hostname: {server_name!r}") from e
         return None
 
     def _pick_upstream(self, route_key: str) -> tuple[Upstream, int]:

@@ -19,7 +19,7 @@ class OnMemoryFile(pathlib.Path):
         self.__data__ = None
         self.__previous_st_mtime__ = None
         if len(self.suffixes):
-            self.mime = http.MIME[self.suffixes[-1][1:]]
+            self.mime = http.MediaTypes.shared()[self.suffixes[-1][1:]]
 
     @property
     def data(self):
@@ -75,7 +75,9 @@ class Service(http.server):
             for m in methods:
                 mu = m.upper()
                 if mu == "WEBSOCKET":
-                    raise ValueError("register WebSocket routes with onWebsocket(), not route()")
+                    raise ValueError(
+                        "register WebSocket routes with onWebsocket(), not route()"
+                    )
                 self.router.register(mu, path, adapter)
             return func
 
@@ -116,6 +118,11 @@ class Service(http.server):
         root = self.static_files_root
         if req_path in self.OnMemoryFiles:
             return
+        base = req_path.split("?", 1)[0]
+        leaf = base.rsplit("/", 1)[-1] if base else ""
+        # 拡張子のないパスはアプリルートの可能性が高く、静的ファイル再スキャンはしない（404 を速くする）
+        if leaf and "." not in leaf and base not in ("/", "/index.html"):
+            return
         now = time.monotonic()
         if (
             self._dev_static_rescan_interval > 0
@@ -148,10 +155,10 @@ class Service(http.server):
         無効化は環境変数 ``N0VA_NO_SUPERVISE=1`` か ``supervised=False``。
         ``python -c`` のように再実行できない場合は自動的に同一プロセスのみで動く。
         """
-        from n0va.core.supervisor import should_use_supervisor, spawn_and_supervise
+        from n0va.core.supervisor import Supervisor
 
         if supervised is None:
             supervised = True
-        if should_use_supervisor(supervised):
-            raise SystemExit(spawn_and_supervise())
+        if Supervisor.should_use_supervisor(supervised):
+            raise SystemExit(Supervisor.spawn_and_supervise())
         asyncio.run(self.__Start__())

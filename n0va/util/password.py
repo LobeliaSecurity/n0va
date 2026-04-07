@@ -2,12 +2,11 @@ import secrets
 import string
 
 
-# `of_length` 由来。読み取りやすさのため紛らわしい記号は含めない運用も可。
-_SYMBOLS = """~!@#$%^&*()-_=+{}|<>?.,`."""
-
-
 class RandomPassword:
     """ブラウザ風および任意長のランダムパスワード生成。"""
+
+    # `of_length` 由来。読み取りやすさのため紛らわしい記号は含めない運用も可。
+    SYMBOL_CHARSET = """~!@#$%^&*()-_=+{}|<>?.,`."""
 
     @staticmethod
     def generate(
@@ -30,7 +29,7 @@ class RandomPassword:
         if digits:
             pools.append(string.digits)
         if symbols:
-            pools.append(_SYMBOLS)
+            pools.append(RandomPassword.SYMBOL_CHARSET)
         if not pools:
             raise ValueError("at least one character class required")
         need = len(pools)

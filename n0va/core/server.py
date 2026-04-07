@@ -3,7 +3,7 @@ import signal
 import sys
 
 import n0va.core.stream
-from n0va.core.supervisor import is_worker_process
+from n0va.core.supervisor import Supervisor
 
 
 class AsyncTcp:
@@ -36,7 +36,7 @@ class AsyncTcp:
         監督プロセスの子ワーカーでは登録しない。停止は親が ``terminate`` / ``kill`` し、
         子が SIGINT で ``stop()`` すると二重処理や終了不能になることがある。
         """
-        if is_worker_process():
+        if Supervisor.is_worker_process():
             return
         self._registered_stop_signals = []
         self._stop_signal_fallback = False

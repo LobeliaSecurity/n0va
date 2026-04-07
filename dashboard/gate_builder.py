@@ -14,7 +14,7 @@ from n0va.core.gate import (
     Upstream,
     UpstreamTls,
 )
-from n0va.util.cert import load_server_ssl_context
+from n0va.util.cert import ServerTlsContext
 
 
 def _strategy(s: str) -> LoadBalanceStrategy:
@@ -120,7 +120,7 @@ def gate_config_from_dict(d: Mapping[str, Any]) -> GateConfig:
         sni_contexts: dict[str, Any] = {}
         for item in ent["snis"]:
             hostname = str(item["hostname"])
-            sni_contexts[hostname] = load_server_ssl_context(
+            sni_contexts[hostname] = ServerTlsContext.from_pem_files(
                 str(item["cert_file"]),
                 str(item["key_file"]),
             )
