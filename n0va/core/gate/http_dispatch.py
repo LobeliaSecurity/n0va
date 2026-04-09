@@ -109,6 +109,9 @@ class HttpDispatchRoute(Route):
     複数 :class:`Upstream` と HTTP パス（等）ルールを持つ :class:`Route`。
 
     実際の上流選択は :class:`HttpRoutingGateService` が先頭リクエスト解析で行う。
+
+    :meth:`~Route.on_entrance_to_destination` / :meth:`~Route.on_destination_to_entrance` は、
+    基底の TCP チャンク単位ではなく **HTTP/1.x メッセージ 1 本分のバイト列** に対して呼ばれる。
     """
 
     def __init__(
@@ -209,6 +212,9 @@ class HttpRoutingGateService(GateService):
         クライアント側 keep-alive では 1 TCP に複数リクエストが載るため、リクエストごとに
         解析して上流を選ぶ。上流側はプール済み接続を再利用し、往復完了後に返却する。
         送受信が途切れた場合は接続を捨て、別接続で最大 1 回だけ再試行する。
+
+        各リクエスト／レスポンスについて :class:`HttpDispatchRoute` の
+        ``on_entrance_to_destination`` / ``on_destination_to_entrance`` を転送直前に通す。
         """
         max_req = route.max_header_bytes + route.max_body_bytes
         max_resp = route.max_header_bytes + route.max_body_bytes
@@ -270,7 +276,19 @@ class HttpRoutingGateService(GateService):
                         checkout_active = True
 
                         try:
-                            await dest.Send(req_bytes)
+                            to_upstream = await route.on_entrance_to_destination(
+                                req_bytes,
+                                entrance_connection,
+                                dest,
+                            )
+                            if to_upstream is None:
+                                await self._upstream_pool.release(
+                                    upstream, dest, healthy=True
+                                )
+                                checkout_active = False
+                                await entrance_connection.Close()
+                                return
+                            await dest.Send(to_upstream)
                         except Exception as e:
                             await self._upstream_pool.release(upstream, dest, healthy=False)
                             checkout_active = False
@@ -298,7 +316,19 @@ class HttpRoutingGateService(GateService):
                             if parsed_resp is not None:
                                 out = resp_buf[: parsed_resp.consumed]
                                 try:
-                                    await entrance_connection.Send(out)
+                                    to_client = await route.on_destination_to_entrance(
+                                        out,
+                                        dest,
+                                        entrance_connection,
+                                    )
+                                    if to_client is None:
+                                        await self._upstream_pool.release(
+                                            upstream, dest, healthy=True
+                                        )
+                                        checkout_active = False
+                                        await entrance_connection.Close()
+                                        return
+                                    await entrance_connection.Send(to_client)
                                 except Exception:
                                     await self._upstream_pool.release(
                                         upstream, dest, healthy=False
