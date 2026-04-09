@@ -314,6 +314,10 @@ class server(AsyncTcp):
                     Request["method"] = b"WebSocket"
                 pending = buf[req.consumed :]
                 await self.serverFunctionHandler(connection, Request)
+        except TimeoutError:
+            # Recv/Send の wait_for など。正常系の無通信タイムアウトを未処理例外にしない。
+            await connection.Close()
+            return
         except Exception as e:
             await connection.Close()
             raise e

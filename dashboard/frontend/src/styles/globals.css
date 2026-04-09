@@ -8,12 +8,20 @@ html {
   color-scheme: light;
 }
 
+html.dark {
+  color-scheme: dark;
+}
+
 body {
   margin: 0;
   min-height: 100dvh;
   background-color: rgb(248 250 252); /* slate-50 */
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+}
+
+html.dark body {
+  background-color: rgb(2 6 23); /* slate-950 */
 }
 
 @media (prefers-reduced-motion: no-preference) {

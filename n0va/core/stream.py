@@ -145,13 +145,15 @@ class AsyncStream:
         await asyncio.wait_for(self._Writer.drain(), timeout=self._Timeout)
 
     async def Recv(self, i=0, timeout=0):
-        R = b""
         if i == 0:
             i = self._Recvsize
         if timeout == 0:
             timeout = self._Timeout
-        R = await asyncio.wait_for(self._Reader.read(i), timeout=timeout)
-        return R
+        try:
+            return await asyncio.wait_for(self._Reader.read(i), timeout=timeout)
+        except TimeoutError:
+            # 待ち受けタイムアウトは切断扱い（EOF と同様に b""）。未処理例外で asyncio に出さない。
+            return b""
 
     async def Close(self):
         self._Writer.close()
@@ -185,7 +187,10 @@ class AsyncManualSslStream(AsyncStream):
             i = self._Recvsize
         if timeout == 0:
             timeout = self._Timeout
-        BUF = await asyncio.wait_for(self._Reader.read(i), timeout=timeout)
+        try:
+            BUF = await asyncio.wait_for(self._Reader.read(i), timeout=timeout)
+        except TimeoutError:
+            BUF = b""
         self._tls_in_buff.write(BUF)
         parts = []
         while True:

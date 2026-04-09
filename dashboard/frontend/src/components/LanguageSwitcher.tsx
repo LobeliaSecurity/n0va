@@ -9,9 +9,11 @@ import { Select } from "@heroui/react/select";
 
 type LanguageSwitcherProps = {
   className?: string;
+  /** サイドバー下部など、ラベルを短くしたコンパクト表示 */
+  compact?: boolean;
 };
 
-export function LanguageSwitcher({ className }: LanguageSwitcherProps) {
+export function LanguageSwitcher({ className, compact }: LanguageSwitcherProps) {
   const { i18n, t } = useTranslation();
 
   useEffect(() => {
@@ -21,9 +23,15 @@ export function LanguageSwitcher({ className }: LanguageSwitcherProps) {
   const langKey = i18n.language === "ja" ? "ja" : "en-GB";
 
   return (
-    <div className={clsx("flex flex-col gap-1.5", className)}>
-      <Label.Root className="text-xs font-medium text-slate-600" id="language-switcher-label">
-        {t("language.label")}
+    <div className={clsx(compact ? "flex flex-col gap-1" : "flex flex-col gap-1.5", className)}>
+      <Label.Root
+        className={clsx(
+          "font-medium text-slate-600 dark:text-slate-400",
+          compact ? "text-[0.65rem] uppercase tracking-wide" : "text-xs",
+        )}
+        id="language-switcher-label"
+      >
+        {compact ? t("nav.langFooterHint") : t("language.label")}
       </Label.Root>
       <Select.Root
         fullWidth
@@ -33,7 +41,7 @@ export function LanguageSwitcher({ className }: LanguageSwitcherProps) {
           if (key) void i18n.changeLanguage(String(key));
         }}
       >
-        <Select.Trigger className="w-full justify-between">
+        <Select.Trigger className={clsx("w-full justify-between", compact && "h-9 min-h-9 text-xs")}>
           <Select.Value />
           <Select.Indicator />
         </Select.Trigger>

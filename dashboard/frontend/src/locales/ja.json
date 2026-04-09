@@ -30,6 +30,42 @@
     "confirmDeleteTitle": "削除の確認",
     "deleteConfirm": "削除する"
   },
+  "errors": {
+    "network": "サーバーに接続できません。ネットワークを確認して再度お試しください。",
+    "forbidden": "この操作を行う権限がありません。",
+    "notFound": "リソースが見つかりません。",
+    "server": "サーバーでエラーが発生しました。しばらくしてから再度お試しください。",
+    "unknown": "予期しないエラーが発生しました。"
+  },
+  "a11y": {
+    "skipToContent": "本文へスキップ"
+  },
+  "pageTitles": {
+    "home": "概要",
+    "content": "静的配信",
+    "gates": "Gate",
+    "gateNew": "新規 Gate",
+    "gateEdit": "Gate の編集",
+    "hosts": "Hosts",
+    "ca": "ローカル CA",
+    "caDetail": "CA の詳細",
+    "password": "パスワード",
+    "settings": "設定"
+  },
+  "errorBoundary": {
+    "title": "画面の表示に失敗しました",
+    "body": "予期しないエラーが発生しました。ページを再読み込みするか、概要へ戻ってください。",
+    "reload": "ページを再読み込み",
+    "home": "概要へ"
+  },
+  "listFilter": {
+    "searchPlaceholder": "検索…",
+    "statusLabel": "状態",
+    "statusAll": "すべて",
+    "statusRunning": "実行中",
+    "statusStopped": "停止",
+    "noResults": "検索・フィルタに一致する項目がありません。"
+  },
   "language": {
     "label": "言語",
     "enGB": "English (UK)",
@@ -53,6 +89,7 @@
     "passwordHint": "安全な生成",
     "settings": "設定",
     "settingsHint": "言語とデータディレクトリ",
+    "langFooterHint": "言語の切り替え",
     "footer": "ローカル開発向けツールです。認証はありません — 信頼できる環境でのみ利用してください。",
     "repoLink": "GitHub（ソース）",
     "issuesLink": "Issues（報告）"
@@ -61,7 +98,11 @@
     "title": "設定",
     "description": "表示言語と、CA・Gate・SQLite などが保存されるデータディレクトリを変更します。",
     "languageTitle": "言語",
-    "languageDesc": "ダッシュボードの UI 言語です。ブラウザの localStorage に保存されます。"
+    "languageDesc": "ダッシュボードの UI 言語です。ブラウザの localStorage に保存されます。",
+    "themeTitle": "外観",
+    "themeDesc": "ライトまたはダークの UI です。ブラウザの localStorage に保存されます。",
+    "themeLight": "ライト",
+    "themeDark": "ダーク"
   },
   "home": {
     "title": "概要",
@@ -153,6 +194,14 @@
     "editTitle": "Gate #{{id}} を編集",
     "headerDesc": "TLS（SNI）で終端し、ホスト名ごとに上流へ振り分けます。変更前に Gate を停止してください。",
     "backToList": "一覧へ戻る",
+    "breadcrumbGates": "Gate",
+    "breadcrumbNew": "新規",
+    "tocHeading": "このページの構成",
+    "tocIdentity": "名前",
+    "leaveUnsavedTitle": "変更を破棄しますか？",
+    "leaveUnsavedBody": "保存していない変更があります。このページを離れますか？",
+    "stayEditing": "編集を続ける",
+    "leavePage": "離れる",
     "runningBanner": "この Gate は<0>実行中</0>です。下の設定を編集するには先に停止してください。",
     "msgCreated": "Gate を作成しました。",
     "msgSaved": "保存しました。",
@@ -266,6 +315,7 @@
     "createCa": "CA を作成",
     "msgCreated": "認証局を作成しました。",
     "listHeading": "認証局一覧",
+    "breadcrumbList": "ローカル CA",
     "issuedBadge": "発行済み {{count}} 件",
     "empty": "まだ認証局がありません。上のフォームから作成してください。"
   },
@@ -316,7 +366,12 @@
     "elevNote": "保存時に OS が昇格を求める場合があります。内容を信頼できる場合のみ承認してください。",
     "ariaContents": "hosts ファイルの内容",
     "saveElevated": "保存（昇格）",
-    "msgSaved": "保存しました。Windows では昇格コピー成功のため UAC を承認してください。"
+    "msgSaved": "保存しました。Windows では昇格コピー成功のため UAC を承認してください。",
+    "confirmSaveTitle": "hosts ファイルを保存しますか？",
+    "confirmSaveBody": "システムの hosts ファイルを上書きします。管理者の承認が必要になる場合があります。",
+    "unsavedHint": "未保存の変更があります。",
+    "readOnlyAlert": "このセッションではファイルを編集できません。権限を直して再読み込みするか、ダッシュボード外で編集してください。",
+    "cannotSaveReadOnly": "読み取り専用のため保存できません。"
   },
   "password": {
     "title": "パスワード",

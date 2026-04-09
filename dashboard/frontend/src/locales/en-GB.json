@@ -30,6 +30,42 @@
     "confirmDeleteTitle": "Confirm deletion",
     "deleteConfirm": "Delete"
   },
+  "errors": {
+    "network": "Could not reach the server. Check your connection and try again.",
+    "forbidden": "You don't have permission for this action.",
+    "notFound": "The resource was not found.",
+    "server": "The server returned an error. Try again later.",
+    "unknown": "Something went wrong."
+  },
+  "a11y": {
+    "skipToContent": "Skip to main content"
+  },
+  "pageTitles": {
+    "home": "Overview",
+    "content": "Static hosting",
+    "gates": "Gates",
+    "gateNew": "New gate",
+    "gateEdit": "Edit gate",
+    "hosts": "Hosts",
+    "ca": "Certificate authorities",
+    "caDetail": "CA detail",
+    "password": "Password",
+    "settings": "Settings"
+  },
+  "errorBoundary": {
+    "title": "Something broke",
+    "body": "The UI hit an unexpected error. Reload the page or return to the overview.",
+    "reload": "Reload page",
+    "home": "Overview"
+  },
+  "listFilter": {
+    "searchPlaceholder": "Search…",
+    "statusLabel": "Status",
+    "statusAll": "All",
+    "statusRunning": "Running",
+    "statusStopped": "Stopped",
+    "noResults": "No entries match your search or filters."
+  },
   "language": {
     "label": "Language",
     "enGB": "English (UK)",
@@ -53,6 +89,7 @@
     "passwordHint": "Secure generation",
     "settings": "Settings",
     "settingsHint": "Language & data directory",
+    "langFooterHint": "Quick language",
     "footer": "Localhost tooling only. No authentication — use on trusted machines.",
     "repoLink": "Source on GitHub",
     "issuesLink": "Issues"
@@ -61,7 +98,11 @@
     "title": "Settings",
     "description": "Choose the UI language and the data directory used for CAs, gates, SQLite, and related files.",
     "languageTitle": "Language",
-    "languageDesc": "Dashboard UI language. Stored in the browser’s localStorage."
+    "languageDesc": "Dashboard UI language. Stored in the browser’s localStorage.",
+    "themeTitle": "Appearance",
+    "themeDesc": "Light or dark interface. Stored in the browser’s localStorage.",
+    "themeLight": "Light",
+    "themeDark": "Dark"
   },
   "home": {
     "title": "Overview",
@@ -153,6 +194,14 @@
     "editTitle": "Edit gate #{{id}}",
     "headerDesc": "TLS (SNI) termination only; each hostname maps to an upstream pool. Stop the gate before changing configuration.",
     "backToList": "Back to list",
+    "breadcrumbGates": "Gates",
+    "breadcrumbNew": "New",
+    "tocHeading": "On this page",
+    "tocIdentity": "Name",
+    "leaveUnsavedTitle": "Discard changes?",
+    "leaveUnsavedBody": "You have unsaved changes. Leave this page?",
+    "stayEditing": "Keep editing",
+    "leavePage": "Leave",
     "runningBanner": "This gate is <0>running</0>. Stop it to edit the configuration below.",
     "msgCreated": "Gate created.",
     "msgSaved": "Saved.",
@@ -266,6 +315,7 @@
     "createCa": "Create CA",
     "msgCreated": "Certificate authority created.",
     "listHeading": "Certificate authorities",
+    "breadcrumbList": "Local CA",
     "issuedBadge": "{{count}} issued",
     "empty": "No certificate authorities yet. Create one above."
   },
@@ -316,7 +366,12 @@
     "elevNote": "Saving will request elevation for this OS. Approve the prompt only if you trust this change.",
     "ariaContents": "Hosts file contents",
     "saveElevated": "Save (elevated)",
-    "msgSaved": "Saved. On Windows, approve the UAC prompt for the elevated copy to succeed."
+    "msgSaved": "Saved. On Windows, approve the UAC prompt for the elevated copy to succeed.",
+    "confirmSaveTitle": "Save hosts file?",
+    "confirmSaveBody": "This overwrites your system hosts file. Administrator approval may be required.",
+    "unsavedHint": "You have unsaved edits.",
+    "readOnlyAlert": "This file cannot be edited in this session. Reload after fixing permissions, or edit outside the dashboard.",
+    "cannotSaveReadOnly": "Cannot save while the file is read-only here."
   },
   "password": {
     "title": "Password",

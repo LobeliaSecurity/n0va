@@ -12,6 +12,8 @@ import { Text } from "@heroui/react/text";
 
 import { PageHeader } from "@/components/PageHeader";
 import { useClipboardFeedback } from "@/hooks/useClipboardFeedback";
+import { usePageTitle } from "@/hooks/usePageTitle";
+import { formatApiError } from "@/lib/apiErrors";
 import { toast } from "@/lib/appToast";
 import { generatePassword, type PasswordPreset } from "@/api";
 
@@ -57,6 +59,7 @@ function IconEyeOff({ className }: { className?: string }) {
 
 export function PasswordPage() {
   const { t } = useTranslation();
+  usePageTitle(t("pageTitles.password"));
   const [pwd, setPwd] = useState("");
   const [pwdVisible, setPwdVisible] = useState(false);
   const [len, setLen] = useState(24);
@@ -72,7 +75,7 @@ export function PasswordPage() {
       setPwd(r.password);
       setPwdVisible(false);
     } catch (e) {
-      toast.danger((e as Error).message);
+      toast.danger(formatApiError(e, t));
     }
   };
 
@@ -105,13 +108,13 @@ export function PasswordPage() {
     <>
       <PageHeader title={t("password.title")} description={t("password.description")} />
 
-      <Card.Root className="rounded-xl border border-slate-200 bg-white shadow-sm">
+      <Card.Root className="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-900">
         <Card.Content className="flex flex-col gap-8 px-6 py-6">
           <section aria-labelledby="pwd-strength-heading">
-            <Text id="pwd-strength-heading" className="mb-3 text-sm font-semibold text-slate-800">
+            <Text id="pwd-strength-heading" className="mb-3 text-sm font-semibold text-slate-800 dark:text-slate-100">
               {t("password.strengthSection")}
             </Text>
-            <p className="mb-4 text-sm text-slate-600">{t("password.strengthSectionDesc")}</p>
+            <p className="mb-4 text-sm text-slate-600 dark:text-slate-300">{t("password.strengthSectionDesc")}</p>
             <div className="flex flex-wrap gap-2">
               <Button variant="primary" onPress={() => genPreset("low")}>
                 {t("password.strengthLow")}
@@ -123,7 +126,7 @@ export function PasswordPage() {
                 {t("password.strengthHigh")}
               </Button>
             </div>
-            <ul className="mt-3 list-inside list-disc space-y-1 text-xs text-slate-500">
+            <ul className="mt-3 list-inside list-disc space-y-1 text-xs text-slate-500 dark:text-slate-400">
               <li>{t("password.strengthLowDesc")}</li>
               <li>{t("password.strengthMediumDesc")}</li>
               <li>{t("password.strengthHighDesc")}</li>
@@ -131,13 +134,13 @@ export function PasswordPage() {
           </section>
 
           <section aria-labelledby="pwd-custom-heading">
-            <Text id="pwd-custom-heading" className="mb-3 text-sm font-semibold text-slate-800">
+            <Text id="pwd-custom-heading" className="mb-3 text-sm font-semibold text-slate-800 dark:text-slate-100">
               {t("password.customSection")}
             </Text>
-            <p className="mb-4 text-sm text-slate-600">{t("password.customSectionDesc")}</p>
+            <p className="mb-4 text-sm text-slate-600 dark:text-slate-300">{t("password.customSectionDesc")}</p>
 
             <div className="mb-4 flex flex-wrap items-center gap-3">
-              <Label.Root className="text-slate-700">{t("password.customLength")}</Label.Root>
+              <Label.Root className="text-slate-700 dark:text-slate-200">{t("password.customLength")}</Label.Root>
               <Input.Root
                 className="max-w-[8rem]"
                 type="number"
@@ -150,13 +153,13 @@ export function PasswordPage() {
             </div>
 
             <fieldset
-              className="rounded-lg border border-slate-200 bg-slate-50/80 px-4 py-3"
+              className="rounded-lg border border-slate-200 bg-slate-50/80 px-4 py-3 dark:border-slate-600 dark:bg-slate-800/50"
               aria-describedby={!classesActive ? "pwd-need-class" : undefined}
             >
-              <legend className="px-1 text-xs font-medium text-slate-700">{t("password.charClasses")}</legend>
+              <legend className="px-1 text-xs font-medium text-slate-700 dark:text-slate-300">{t("password.charClasses")}</legend>
               <div className="mt-2 flex flex-col gap-2 sm:flex-row sm:flex-wrap">
                 <Checkbox.Root
-                  className="flex max-w-full items-start gap-2 text-sm text-slate-800"
+                  className="flex max-w-full items-start gap-2 text-sm text-slate-800 dark:text-slate-200"
                   isSelected={uppercase}
                   onChange={setUppercase}
                 >
@@ -166,7 +169,7 @@ export function PasswordPage() {
                   <Checkbox.Content>{t("password.includeUppercase")}</Checkbox.Content>
                 </Checkbox.Root>
                 <Checkbox.Root
-                  className="flex max-w-full items-start gap-2 text-sm text-slate-800"
+                  className="flex max-w-full items-start gap-2 text-sm text-slate-800 dark:text-slate-200"
                   isSelected={lowercase}
                   onChange={setLowercase}
                 >
@@ -176,7 +179,7 @@ export function PasswordPage() {
                   <Checkbox.Content>{t("password.includeLowercase")}</Checkbox.Content>
                 </Checkbox.Root>
                 <Checkbox.Root
-                  className="flex max-w-full items-start gap-2 text-sm text-slate-800"
+                  className="flex max-w-full items-start gap-2 text-sm text-slate-800 dark:text-slate-200"
                   isSelected={digits}
                   onChange={setDigits}
                 >
@@ -186,7 +189,7 @@ export function PasswordPage() {
                   <Checkbox.Content>{t("password.includeDigits")}</Checkbox.Content>
                 </Checkbox.Root>
                 <Checkbox.Root
-                  className="flex max-w-full items-start gap-2 text-sm text-slate-800"
+                  className="flex max-w-full items-start gap-2 text-sm text-slate-800 dark:text-slate-200"
                   isSelected={symbols}
                   onChange={setSymbols}
                 >
@@ -212,10 +215,10 @@ export function PasswordPage() {
           </section>
 
           <section aria-labelledby="pwd-browser-heading">
-            <Text id="pwd-browser-heading" className="mb-3 text-sm font-semibold text-slate-800">
+            <Text id="pwd-browser-heading" className="mb-3 text-sm font-semibold text-slate-800 dark:text-slate-100">
               {t("password.browserSection")}
             </Text>
-            <p className="mb-4 text-sm text-slate-600">{t("password.browserSectionDesc")}</p>
+            <p className="mb-4 text-sm text-slate-600 dark:text-slate-300">{t("password.browserSectionDesc")}</p>
             <div className="flex flex-wrap gap-2">
               <Button variant="secondary" onPress={genSafari}>
                 {t("password.safari")}
@@ -228,7 +231,7 @@ export function PasswordPage() {
 
           <div>
             <div className="mb-2 flex items-center justify-between gap-2">
-              <Label.Root className="text-slate-700">{t("password.output")}</Label.Root>
+              <Label.Root className="text-slate-700 dark:text-slate-200">{t("password.output")}</Label.Root>
               <div className="flex items-center gap-1">
                 <Button
                   size="sm"
@@ -247,7 +250,7 @@ export function PasswordPage() {
               </div>
             </div>
             <div
-              className="rounded-lg border border-slate-200 bg-slate-50 px-4 py-3"
+              className="rounded-lg border border-slate-200 bg-slate-50 px-4 py-3 dark:border-slate-600 dark:bg-slate-800/80"
               aria-live="polite"
               aria-label={
                 !pwd ? t("password.ariaOutput") : !pwdVisible ? t("password.ariaMasked") : undefined
@@ -255,8 +258,8 @@ export function PasswordPage() {
             >
               <code
                 className={clsx(
-                  "block whitespace-pre-wrap break-all font-mono text-sm leading-relaxed [word-break:break-word] selection:bg-slate-200",
-                  pwd ? "text-slate-900" : "text-slate-400",
+                  "block whitespace-pre-wrap break-all font-mono text-sm leading-relaxed [word-break:break-word] selection:bg-slate-200 dark:selection:bg-slate-600",
+                  pwd ? "text-slate-900 dark:text-slate-100" : "text-slate-400 dark:text-slate-500",
                 )}
               >
                 {!pwd ? (
@@ -272,7 +275,7 @@ export function PasswordPage() {
                 )}
               </code>
             </div>
-            <p className="mt-2 text-xs text-slate-500">{t("password.hint")}</p>
+            <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">{t("password.hint")}</p>
           </div>
         </Card.Content>
       </Card.Root>
