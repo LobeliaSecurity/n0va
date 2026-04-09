@@ -200,3 +200,57 @@ export const putHosts = (content: string) =>
     method: "PUT",
     body: JSON.stringify({ content }),
   });
+
+export type ContentServerDto = {
+  id: number;
+  name: string;
+  host: string;
+  port: number;
+  root_path: string;
+  auto_start: boolean;
+  running: boolean;
+  base_url: string;
+  created_at?: string;
+  updated_at?: string;
+};
+
+export const listContentServers = () =>
+  api<{ content_servers: ContentServerDto[] }>("/api/v1/content-servers");
+
+export const createContentServer = (body: {
+  name: string;
+  host?: string;
+  port: number;
+  root_path: string;
+  auto_start?: boolean;
+}) => api<ContentServerDto>("/api/v1/content-servers", { method: "POST", body: JSON.stringify(body) });
+
+export const updateContentServer = (
+  id: number,
+  body: {
+    name: string;
+    host: string;
+    port: number;
+    root_path: string;
+    auto_start: boolean;
+  },
+) =>
+  api<ContentServerDto>(`/api/v1/content-servers/${id}`, {
+    method: "PUT",
+    body: JSON.stringify(body),
+  });
+
+export const deleteContentServer = (id: number) =>
+  api<{ ok: boolean }>(`/api/v1/content-servers/${id}`, { method: "DELETE" });
+
+export const startContentServer = (id: number) =>
+  api<{ ok: boolean; server: ContentServerDto }>(`/api/v1/content-servers/${id}/start`, {
+    method: "POST",
+    body: "{}",
+  });
+
+export const stopContentServer = (id: number) =>
+  api<{ ok: boolean; server: ContentServerDto }>(`/api/v1/content-servers/${id}/stop`, {
+    method: "POST",
+    body: "{}",
+  });

@@ -53,10 +53,10 @@ export function GateFormFlowOverview({ model }: { model: GateFormModel }) {
 
   const routeSummaries = model.routes.map((route) => {
     const key = route.routeKey.trim() || "—";
-    const targets = route.upstreams.map((u) => `${u.host.trim() || "?"}:${u.port.trim() || "?"}`).join(", ");
+    const targetParts = route.upstreams.map((u) => `${u.host.trim() || "?"}:${u.port.trim() || "?"}`);
     return {
       key,
-      targets: targets || t("gateForm.flow.noUpstreams"),
+      targetParts: targetParts.length > 0 ? targetParts : null,
       httpRules: route.httpDispatch?.enabled === true,
     };
   });
@@ -71,7 +71,7 @@ export function GateFormFlowOverview({ model }: { model: GateFormModel }) {
       </h2>
       <p className="mt-1.5 max-w-3xl text-xs leading-relaxed text-slate-600">{t("gateForm.flow.subtitle")}</p>
 
-      <div className="mt-5 flex flex-col md:flex-row md:items-stretch md:gap-0">
+      <div className="mt-5 flex flex-col gap-4 md:flex-row md:items-stretch md:gap-0">
         <StepBox
           kicker={t("gateForm.flow.stepListen")}
           title={listenTitle}
@@ -86,20 +86,52 @@ export function GateFormFlowOverview({ model }: { model: GateFormModel }) {
             {t("gateForm.flow.stepRoutes")}
           </span>
           <p className="mt-1.5 text-xs leading-relaxed text-slate-600">{t("gateForm.flow.routesIntro")}</p>
-          <ul className="mt-3 space-y-2">
+          <ul className="mt-3 min-w-0 space-y-2.5">
             {routeSummaries.map((r, i) => (
               <li
                 key={`flow-route-${i}`}
-                className="rounded-lg border border-slate-100 bg-slate-50/90 px-3 py-2 text-xs text-slate-800"
+                className="min-w-0 rounded-lg border border-slate-100 bg-slate-50/90 px-3 py-2.5 text-xs text-slate-800"
               >
-                <span className="font-mono font-semibold text-indigo-900">{r.key}</span>
-                {r.httpRules ? (
-                  <span className="ml-2 rounded bg-amber-100 px-1.5 py-0.5 text-[0.65rem] font-semibold uppercase tracking-wide text-amber-900">
-                    {t("gateForm.flow.httpBadge")}
-                  </span>
-                ) : null}
-                <span className="mx-1.5 text-slate-400">→</span>
-                <span className="font-mono text-slate-700">{r.targets}</span>
+                <div className="flex min-w-0 flex-wrap items-start gap-x-2 gap-y-1">
+                  <div className="min-w-0 flex-1 basis-[min(100%,12rem)]">
+                    <p className="text-[0.65rem] font-medium uppercase tracking-wide text-slate-500">
+                      {t("gateForm.flow.routeCardMatch")}
+                    </p>
+                    <p
+                      className="mt-0.5 break-all font-mono text-[0.8125rem] font-semibold leading-snug text-indigo-900"
+                      title={r.key}
+                    >
+                      {r.key}
+                    </p>
+                  </div>
+                  {r.httpRules ? (
+                    <span className="shrink-0 rounded bg-amber-100 px-1.5 py-0.5 text-[0.65rem] font-semibold uppercase tracking-wide text-amber-900">
+                      {t("gateForm.flow.httpBadge")}
+                    </span>
+                  ) : null}
+                </div>
+                <div className="mt-2.5 min-w-0 border-t border-slate-200/80 pt-2.5">
+                  <p className="text-[0.65rem] font-medium uppercase tracking-wide text-slate-500">
+                    {t("gateForm.flow.routeCardForward")}
+                  </p>
+                  {r.targetParts ? (
+                    <ul className="mt-1 min-w-0 list-none space-y-1 p-0">
+                      {r.targetParts.map((part, j) => (
+                        <li
+                          key={`flow-route-${i}-up-${j}`}
+                          className="flex min-w-0 items-start gap-2 font-mono text-[0.8125rem] leading-snug text-slate-700"
+                        >
+                          <span className="mt-0.5 shrink-0 text-slate-400" aria-hidden>
+                            →
+                          </span>
+                          <span className="min-w-0 break-all">{part}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <p className="mt-1 break-words text-slate-500 italic">{t("gateForm.flow.noUpstreams")}</p>
+                  )}
+                </div>
               </li>
             ))}
           </ul>

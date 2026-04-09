@@ -11,6 +11,7 @@ import os
 import signal
 import subprocess
 import sys
+import time
 
 
 class Supervisor:
@@ -78,12 +79,32 @@ class Supervisor:
         proc = subprocess.Popen(cmd, **kwargs)
 
         sig_hits = 0
+        # 第 1 シグナルで graceful を送ったあと、これを過ぎても子が生きていれば terminate する。
+        graceful_deadline: float | None = None
+
+        def _graceful_child_stop() -> None:
+            """子にだけ graceful 停止を試みる（Windows は CTRL+BREAK、Unix は SIGINT）。"""
+            if proc.poll() is not None:
+                return
+            if sys.platform == "win32":
+                # CREATE_NEW_PROCESS_GROUP の子はコンソールの Ctrl+C 対象外。
+                # CTRL+BREAK を送ると子のシグナルハンドラ／KeyboardInterrupt の余地ができる。
+                try:
+                    proc.send_signal(signal.CTRL_BREAK_EVENT)
+                except (OSError, ValueError, AttributeError):
+                    proc.terminate()
+                return
+            try:
+                proc.send_signal(signal.SIGINT)
+            except (OSError, ValueError):
+                proc.terminate()
 
         def _handle(sig: int, frame: object | None) -> None:
-            nonlocal sig_hits
+            nonlocal sig_hits, graceful_deadline
             sig_hits += 1
             if sig_hits == 1:
-                proc.terminate()
+                _graceful_child_stop()
+                graceful_deadline = time.monotonic() + 4.0
             else:
                 proc.kill()
 
@@ -108,6 +129,13 @@ class Supervisor:
                     code = proc.wait(timeout=0.3)
                     break
                 except subprocess.TimeoutExpired:
+                    if (
+                        graceful_deadline is not None
+                        and time.monotonic() >= graceful_deadline
+                    ):
+                        if proc.poll() is None:
+                            proc.terminate()
+                        graceful_deadline = None
                     continue
         finally:
             for sig, prev in old.items():

@@ -9,11 +9,43 @@ from pathlib import Path
 from typing import Any, Optional
 
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 
 def _utc_iso() -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+
+def _migrate_schema(conn: sqlite3.Connection) -> None:
+    """スキーマバージョンに応じてテーブルを追加・更新する。"""
+    row = conn.execute(
+        "SELECT value FROM meta WHERE key = 'schema_version'"
+    ).fetchone()
+    ver = int(row["value"]) if row else 0
+    if ver >= SCHEMA_VERSION:
+        return
+    if ver < 3:
+        conn.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS content_servers (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              name TEXT NOT NULL,
+              host TEXT NOT NULL DEFAULT '127.0.0.1',
+              port INTEGER NOT NULL,
+              root_path TEXT NOT NULL,
+              auto_start INTEGER NOT NULL DEFAULT 0,
+              running INTEGER NOT NULL DEFAULT 0,
+              created_at TEXT NOT NULL,
+              updated_at TEXT NOT NULL
+            );
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_content_servers_port
+              ON content_servers(port);
+            """
+        )
+    conn.execute(
+        "INSERT OR REPLACE INTO meta (key, value) VALUES ('schema_version', ?)",
+        (str(SCHEMA_VERSION),),
+    )
 
 
 def _migrate_legacy_ca(conn: sqlite3.Connection) -> None:
@@ -93,6 +125,19 @@ class IssuedCertRow:
 
 
 @dataclass
+class ContentServerRow:
+    id: int
+    name: str
+    host: str
+    port: int
+    root_path: str
+    auto_start: int
+    running: int
+    created_at: str
+    updated_at: str
+
+
+@dataclass
 class IssuedCertWithCaName:
     """発行済み証明書 + 所属 CA 名（一覧・Gate 参照用）。"""
 
@@ -147,13 +192,6 @@ class DashboardDB:
                     );
                     """
                 )
-                cur = conn.execute("SELECT value FROM meta WHERE key = 'schema_version'")
-                row = cur.fetchone()
-                if row is None:
-                    conn.execute(
-                        "INSERT INTO meta (key, value) VALUES ('schema_version', ?)",
-                        (str(SCHEMA_VERSION),),
-                    )
                 conn.execute(
                     "INSERT OR IGNORE INTO ca_state (id, data_dir) VALUES (1, '.')"
                 )
@@ -188,6 +226,7 @@ class DashboardDB:
                     """
                 )
                 _migrate_legacy_ca(conn)
+                _migrate_schema(conn)
                 conn.commit()
             finally:
                 conn.close()
@@ -663,8 +702,161 @@ class DashboardDB:
                     serial_number=r["serial_number"],
                     created_at=r["created_at"],
                 )
-                conn.execute("DELETE FROM issued_certs WHERE id = ? AND ca_id = ?", (issued_id, ca_id))
+                conn.execute(
+                    "DELETE FROM issued_certs WHERE id = ? AND ca_id = ?",
+                    (issued_id, ca_id),
+                )
                 conn.commit()
                 return row
+            finally:
+                conn.close()
+
+    def list_content_servers(self) -> list[ContentServerRow]:
+        with self._lock:
+            conn = self._connect()
+            try:
+                cur = conn.execute(
+                    """
+                    SELECT id, name, host, port, root_path, auto_start, running, created_at, updated_at
+                    FROM content_servers ORDER BY id
+                    """
+                )
+                return [
+                    ContentServerRow(
+                        id=r["id"],
+                        name=r["name"],
+                        host=r["host"],
+                        port=int(r["port"]),
+                        root_path=r["root_path"],
+                        auto_start=int(r["auto_start"]),
+                        running=int(r["running"]),
+                        created_at=r["created_at"],
+                        updated_at=r["updated_at"],
+                    )
+                    for r in cur.fetchall()
+                ]
+            finally:
+                conn.close()
+
+    def get_content_server(self, server_id: int) -> Optional[ContentServerRow]:
+        with self._lock:
+            conn = self._connect()
+            try:
+                cur = conn.execute(
+                    """
+                    SELECT id, name, host, port, root_path, auto_start, running, created_at, updated_at
+                    FROM content_servers WHERE id = ?
+                    """,
+                    (server_id,),
+                )
+                r = cur.fetchone()
+                if r is None:
+                    return None
+                return ContentServerRow(
+                    id=r["id"],
+                    name=r["name"],
+                    host=r["host"],
+                    port=int(r["port"]),
+                    root_path=r["root_path"],
+                    auto_start=int(r["auto_start"]),
+                    running=int(r["running"]),
+                    created_at=r["created_at"],
+                    updated_at=r["updated_at"],
+                )
+            finally:
+                conn.close()
+
+    def insert_content_server(
+        self,
+        *,
+        name: str,
+        host: str,
+        port: int,
+        root_path: str,
+        auto_start: bool,
+    ) -> int:
+        now = _utc_iso()
+        with self._lock:
+            conn = self._connect()
+            try:
+                cur = conn.execute(
+                    """
+                    INSERT INTO content_servers (
+                      name, host, port, root_path, auto_start, running, created_at, updated_at
+                    ) VALUES (?,?,?,?,?,0,?,?)
+                    """,
+                    (
+                        name,
+                        host,
+                        port,
+                        root_path,
+                        1 if auto_start else 0,
+                        now,
+                        now,
+                    ),
+                )
+                conn.commit()
+                return int(cur.lastrowid)
+            finally:
+                conn.close()
+
+    def update_content_server(
+        self,
+        server_id: int,
+        *,
+        name: str,
+        host: str,
+        port: int,
+        root_path: str,
+        auto_start: bool,
+    ) -> bool:
+        now = _utc_iso()
+        with self._lock:
+            conn = self._connect()
+            try:
+                cur = conn.execute(
+                    """
+                    UPDATE content_servers SET
+                      name = ?, host = ?, port = ?, root_path = ?, auto_start = ?, updated_at = ?
+                    WHERE id = ?
+                    """,
+                    (
+                        name,
+                        host,
+                        port,
+                        root_path,
+                        1 if auto_start else 0,
+                        now,
+                        server_id,
+                    ),
+                )
+                conn.commit()
+                return cur.rowcount > 0
+            finally:
+                conn.close()
+
+    def delete_content_server(self, server_id: int) -> bool:
+        with self._lock:
+            conn = self._connect()
+            try:
+                cur = conn.execute(
+                    "DELETE FROM content_servers WHERE id = ?", (server_id,)
+                )
+                conn.commit()
+                return cur.rowcount > 0
+            finally:
+                conn.close()
+
+    def set_content_server_running(self, server_id: int, running: bool) -> None:
+        with self._lock:
+            conn = self._connect()
+            try:
+                conn.execute(
+                    """
+                    UPDATE content_servers SET running = ?, updated_at = ? WHERE id = ?
+                    """,
+                    (1 if running else 0, _utc_iso(), server_id),
+                )
+                conn.commit()
             finally:
                 conn.close()

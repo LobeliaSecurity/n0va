@@ -258,80 +258,100 @@ class HttpRoutingGateService(GateService):
             try:
                 relay_ok = False
                 for attempt in range(2):
+                    dest: n0va.core.stream.AsyncStream | None = None
+                    checkout_active = False
                     try:
-                        dest = await self._upstream_pool.acquire(upstream)
-                    except Exception:
-                        await entrance_connection.Close()
-                        return
-
-                    try:
-                        await dest.Send(req_bytes)
-                    except Exception as e:
-                        await self._upstream_pool.release(upstream, dest, healthy=False)
-                        if attempt == 0 and UpstreamConnectionPool.transient_error(e):
-                            continue
-                        await entrance_connection.Close()
-                        return
-
-                    resp_buf = b""
-                    while True:
                         try:
-                            parsed_resp = Http1ResponseParser.parse(
-                                resp_buf,
-                                request_method=parsed.method,
-                                max_header_bytes=route.max_header_bytes,
-                                max_body_bytes=route.max_body_bytes,
-                            )
-                        except Http1ParseError:
-                            await self._upstream_pool.release(
-                                upstream, dest, healthy=False
-                            )
+                            dest = await self._upstream_pool.acquire(upstream)
+                        except Exception:
                             await entrance_connection.Close()
                             return
-                        if parsed_resp is not None:
-                            out = resp_buf[: parsed_resp.consumed]
+
+                        checkout_active = True
+
+                        try:
+                            await dest.Send(req_bytes)
+                        except Exception as e:
+                            await self._upstream_pool.release(upstream, dest, healthy=False)
+                            checkout_active = False
+                            if attempt == 0 and UpstreamConnectionPool.transient_error(e):
+                                continue
+                            await entrance_connection.Close()
+                            return
+
+                        resp_buf = b""
+                        while True:
                             try:
-                                await entrance_connection.Send(out)
-                            except Exception:
+                                parsed_resp = Http1ResponseParser.parse(
+                                    resp_buf,
+                                    request_method=parsed.method,
+                                    max_header_bytes=route.max_header_bytes,
+                                    max_body_bytes=route.max_body_bytes,
+                                )
+                            except Http1ParseError:
                                 await self._upstream_pool.release(
                                     upstream, dest, healthy=False
                                 )
+                                checkout_active = False
                                 await entrance_connection.Close()
                                 return
-                            await self._upstream_pool.release(
-                                upstream, dest, healthy=True
-                            )
-                            relay_ok = True
+                            if parsed_resp is not None:
+                                out = resp_buf[: parsed_resp.consumed]
+                                try:
+                                    await entrance_connection.Send(out)
+                                except Exception:
+                                    await self._upstream_pool.release(
+                                        upstream, dest, healthy=False
+                                    )
+                                    checkout_active = False
+                                    await entrance_connection.Close()
+                                    return
+                                await self._upstream_pool.release(
+                                    upstream, dest, healthy=True
+                                )
+                                checkout_active = False
+                                relay_ok = True
+                                break
+
+                            try:
+                                chunk = await dest.Recv()
+                            except Exception as e:
+                                await self._upstream_pool.release(
+                                    upstream, dest, healthy=False
+                                )
+                                checkout_active = False
+                                if attempt == 0 and UpstreamConnectionPool.transient_error(e):
+                                    break
+                                await entrance_connection.Close()
+                                return
+                            if chunk == b"":
+                                await self._upstream_pool.release(
+                                    upstream, dest, healthy=False
+                                )
+                                checkout_active = False
+                                if attempt == 0:
+                                    break
+                                await entrance_connection.Close()
+                                return
+                            resp_buf += chunk
+                            if len(resp_buf) > max_resp:
+                                await self._upstream_pool.release(
+                                    upstream, dest, healthy=False
+                                )
+                                checkout_active = False
+                                await entrance_connection.Close()
+                                return
+
+                        if relay_ok:
                             break
-
-                        try:
-                            chunk = await dest.Recv()
-                        except Exception as e:
-                            await self._upstream_pool.release(
-                                upstream, dest, healthy=False
-                            )
-                            if attempt == 0 and UpstreamConnectionPool.transient_error(e):
-                                break
-                            await entrance_connection.Close()
-                            return
-                        if chunk == b"":
-                            await self._upstream_pool.release(
-                                upstream, dest, healthy=False
-                            )
-                            if attempt == 0:
-                                break
-                            await entrance_connection.Close()
-                            return
-                        resp_buf += chunk
-                        if len(resp_buf) > max_resp:
-                            await self._upstream_pool.release(
-                                upstream, dest, healthy=False
-                            )
-                            await entrance_connection.Close()
-                            return
-
-                    if relay_ok:
-                        break
+                    finally:
+                        # CancelledError は 3.11+ で BaseException のため except Exception を抜け、
+                        # プール未返却のままゲート→上流 TCP が残る。停止時に静的配信側まで掴み続ける。
+                        if checkout_active and dest is not None:
+                            try:
+                                await self._upstream_pool.release(upstream, dest, healthy=False)
+                            except Exception:
+                                pass
 
                 if not relay_ok:
                     await entrance_connection.Close()

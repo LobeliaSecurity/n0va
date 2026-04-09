@@ -12,7 +12,15 @@ import { PageHeader } from "@/components/PageHeader";
 import { staggerChildrenOnly, staggerContainer, staggerItem, staggerItemSubtle } from "@/lib/motion";
 import { toast } from "@/lib/appToast";
 import { summarizeGate } from "@/gate/summarizeGate";
-import { health, listCas, listGates, type CaDto, type GateDto } from "@/api";
+import {
+  health,
+  listCas,
+  listContentServers,
+  listGates,
+  type CaDto,
+  type GateDto,
+  type ContentServerDto,
+} from "@/api";
 
 const HOME_GATE_LIMIT = 4;
 const HOME_CA_LIMIT = 4;
@@ -23,11 +31,13 @@ export function HomePage() {
   const [db, setDb] = useState<string | null>(null);
   const [gates, setGates] = useState<GateDto[]>([]);
   const [cas, setCas] = useState<CaDto[]>([]);
+  const [contentServers, setContentServers] = useState<ContentServerDto[]>([]);
   const [loading, setLoading] = useState(true);
 
   const quickLinks = useMemo(
     () =>
       [
+        { to: "/content", titleKey: "home.quickContentTitle", bodyKey: "home.quickContentBody" },
         { to: "/gates", titleKey: "home.quickGateTitle", bodyKey: "home.quickGateBody" },
         { to: "/hosts", titleKey: "home.quickHostsTitle", bodyKey: "home.quickHostsBody" },
         { to: "/ca", titleKey: "home.quickCaTitle", bodyKey: "home.quickCaBody" },
@@ -42,10 +52,16 @@ export function HomePage() {
     void (async () => {
       setLoading(true);
       try {
-        const [g, c, h] = await Promise.all([listGates(), listCas(), health()]);
+        const [g, c, cs, h] = await Promise.all([
+          listGates(),
+          listCas(),
+          listContentServers(),
+          health(),
+        ]);
         if (!cancelled) {
           setGates(g.gates);
           setCas(c.cas);
+          setContentServers(cs.content_servers);
           setDb(h.db);
         }
       } catch (e) {
@@ -60,6 +76,10 @@ export function HomePage() {
   }, []);
 
   const runningCount = useMemo(() => gates.filter((g) => g.running).length, [gates]);
+  const contentRunningCount = useMemo(
+    () => contentServers.filter((s) => s.running).length,
+    [contentServers],
+  );
   const issuedTotal = useMemo(() => cas.reduce((s, c) => s + (c.issued_count ?? 0), 0), [cas]);
   const gatesPreview = useMemo(() => gates.slice(0, HOME_GATE_LIMIT), [gates]);
   const casPreview = useMemo(() => cas.slice(0, HOME_CA_LIMIT), [cas]);
@@ -69,7 +89,7 @@ export function HomePage() {
       <PageHeader title={t("home.title")} description={t("home.description")} />
 
       <motion.div
-        className="mb-10 grid gap-4 sm:grid-cols-3"
+        className="mb-10 grid gap-4 sm:grid-cols-2 lg:grid-cols-4"
         variants={staggerContainer}
         initial={reduceMotion ? "show" : "hidden"}
         animate="show"
@@ -110,6 +130,20 @@ export function HomePage() {
             </p>
             <p className="mt-1 text-xs text-slate-600">
               {t("home.statCasHint", { count: loading ? "—" : issuedTotal })}
+            </p>
+          </motion.div>
+          <motion.div
+            variants={staggerItem}
+            className="rounded-2xl border border-slate-200/90 bg-gradient-to-br from-white via-slate-50/80 to-sky-50/40 p-5 shadow-sm ring-1 ring-slate-100/80"
+          >
+            <p className="text-[0.65rem] font-semibold uppercase tracking-wider text-slate-500">
+              {t("home.statContent")}
+            </p>
+            <p className="mt-2 text-3xl font-semibold tabular-nums tracking-tight text-slate-900">
+              {loading ? "—" : contentServers.length}
+            </p>
+            <p className="mt-1 text-xs text-slate-600">
+              {t("home.statContentHint", { running: loading ? "—" : contentRunningCount })}
             </p>
           </motion.div>
         </motion.div>

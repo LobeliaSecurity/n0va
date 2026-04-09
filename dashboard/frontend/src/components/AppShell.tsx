@@ -15,6 +15,7 @@ export function AppShell() {
 
   const NAV_ITEMS: { to: string; labelKey: string; hintKey: string; end?: boolean }[] = [
     { to: "/", labelKey: "nav.overview", hintKey: "nav.overviewHint", end: true },
+    { to: "/content", labelKey: "nav.content", hintKey: "nav.contentHint" },
     { to: "/gates", labelKey: "nav.gate", hintKey: "nav.gateHint" },
     { to: "/hosts", labelKey: "nav.hosts", hintKey: "nav.hostsHint" },
     { to: "/ca", labelKey: "nav.ca", hintKey: "nav.caHint" },

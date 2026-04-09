@@ -5,19 +5,29 @@ import json
 import logging
 import os
 import re
+import sqlite3
 import shutil
 import urllib.parse
 import uuid
 from pathlib import Path
 from typing import Any, Optional
 
+from .content_runtime import ContentServerRuntime, bind_conflicts_dashboard
+
 import n0va
 from n0va.core.gate import GateService, HttpRoutingGateService
+from n0va.core.supervisor import Supervisor
 from n0va.handler.context import HttpResponse, RequestContext
 from n0va.util.cert import Certificate, CertificateAuthority
 from n0va.util.password import RandomPassword
 
-from .db import CaRow, DashboardDB, IssuedCertRow, IssuedCertWithCaName
+from .db import (
+    CaRow,
+    ContentServerRow,
+    DashboardDB,
+    IssuedCertRow,
+    IssuedCertWithCaName,
+)
 from .gate_builder import default_plain_gate_config, gate_config_from_dict
 from .hosts_file import read_hosts, resolved_hosts_path, write_hosts
 from .paths import resolve_startup_sqlite_path, storage_root
@@ -44,6 +54,14 @@ def _parse_query(content: bytes) -> dict[str, str]:
         return {}
     q = content.decode("utf-8", "replace")
     return {k: v[0] for k, v in urllib.parse.parse_qs(q).items()}
+
+
+def _content_base_url(host: str, port: int) -> str:
+    """ブラウザで開きやすい表示用 URL（ワイルドカード待受は 127.0.0.1 に読み替え）。"""
+    h = host.strip()
+    if h in ("0.0.0.0", "::", "[::]"):
+        h = "127.0.0.1"
+    return f"http://{h}:{port}/"
 
 
 def _query_bool(q: dict[str, str], key: str, default: bool = True) -> bool:
@@ -111,7 +129,9 @@ def _issued_dict(row: IssuedCertRow) -> dict[str, Any]:
     }
 
 
-def _unlink_paths_under_issued_dir(ca_id: int, row: IssuedCertRow, storage: Path) -> None:
+def _unlink_paths_under_issued_dir(
+    ca_id: int, row: IssuedCertRow, storage: Path
+) -> None:
     """記録された PEM/PFX を `ca/<ca_id>/issued/` 配下に限り削除する。"""
     issued_root = (storage / "ca" / str(ca_id) / "issued").resolve()
     for rel in (row.cert_path, row.key_path, row.pfx_path):
@@ -135,6 +155,14 @@ class GateRuntime:
     def __init__(self) -> None:
         self._services: dict[int, HttpRoutingGateService] = {}
         self._tasks: dict[int, asyncio.Task[None]] = {}
+        self._gate_stop_locks: dict[int, asyncio.Lock] = {}
+
+    def _gate_stop_lock(self, gate_id: int) -> asyncio.Lock:
+        lk = self._gate_stop_locks.get(gate_id)
+        if lk is None:
+            lk = asyncio.Lock()
+            self._gate_stop_locks[gate_id] = lk
+        return lk
 
     def is_running(self, gate_id: int) -> bool:
         return gate_id in self._services
@@ -156,16 +184,30 @@ class GateRuntime:
         self._tasks[gate_id] = task
 
     async def stop(self, gate_id: int) -> None:
-        svc = self._services.pop(gate_id, None)
-        task = self._tasks.pop(gate_id, None)
-        if svc is not None:
-            await svc.stop()
-        if task is not None and not task.done():
-            task.cancel()
+        async with self._gate_stop_lock(gate_id):
+            svc = self._services.get(gate_id)
+            task = self._tasks.get(gate_id)
+            if svc is None and task is None:
+                return
             try:
-                await task
-            except asyncio.CancelledError:
-                pass
+                # 別タスクから先に close + abort 済み接続（AsyncTcp / GateService.stop）。
+                # cancel 先行だと serve_forever 内の wait_closed がハンドラの Recv 待ちで進まず
+                # 同一ループ上の停止 API とデッドロックしうる。
+                if svc is not None:
+                    try:
+                        await asyncio.wait_for(svc.stop(), timeout=20.0)
+                    except asyncio.TimeoutError:
+                        pass
+                if task is not None and not task.done():
+                    task.cancel()
+                    try:
+                        await asyncio.wait_for(task, timeout=15.0)
+                    except (asyncio.TimeoutError, asyncio.CancelledError):
+                        pass
+            finally:
+                self._services.pop(gate_id, None)
+                self._tasks.pop(gate_id, None)
+                self._gate_stop_locks.pop(gate_id, None)
 
 
 class DashboardApp(n0va.Service):
@@ -181,7 +223,9 @@ class DashboardApp(n0va.Service):
         db_path: Optional[str] = None,
     ) -> None:
         super().__init__(host=host, port=port, root_path=root_path)
-        env_root = Path(os.environ.get("N0VA_DASHBOARD_DATA", ".")).expanduser().resolve()
+        env_root = (
+            Path(os.environ.get("N0VA_DASHBOARD_DATA", ".")).expanduser().resolve()
+        )
         self._db_path = (
             Path(db_path).expanduser().resolve()
             if db_path
@@ -190,10 +234,24 @@ class DashboardApp(n0va.Service):
         self._db = DashboardDB(self._db_path)
         self._migrate_legacy_ca_tree()
         self._gates = GateRuntime()
+        self._content = ContentServerRuntime(host, port)
         for row in self._db.list_gates():
             if row.running:
                 self._db.set_running(row.id, False)
+        for row in self._db.list_content_servers():
+            if row.running:
+                self._db.set_content_server_running(row.id, False)
         self._register_routes()
+
+    async def _shutdown_content_servers_and_clear_db(self) -> None:
+        await self._content.shutdown_all()
+        for row in self._db.list_content_servers():
+            self._db.set_content_server_running(row.id, False)
+
+    def shutdown_content_servers_sync(self) -> None:
+        """イベントループ外（例: ``run.py`` の ``finally``）。本体停止は ``__Start__`` の ``finally`` で await 済み。DB の running のみ保険で落とす。"""
+        for row in self._db.list_content_servers():
+            self._db.set_content_server_running(row.id, False)
 
     async def __Start__(self) -> None:
         log = logging.getLogger("n0va.dashboard")
@@ -204,11 +262,49 @@ class DashboardApp(n0va.Service):
             self.RootPath,
         )
         log.info("Database: %s", self._db_path.as_posix())
-        log.info("Ctrl+C で停止します（親プロセスが子サーバーを終了します）。")
+        if Supervisor.is_worker_process():
+            log.info(
+                "Ctrl+C: コンソールでは親プロセスが先に受け取り、この子プロセスへ graceful 停止を送ります"
+                "（Windows は CTRL+BREAK 相当、Unix は SIGINT）。"
+            )
+            log.info(
+                "約 4 秒以内に子が終了しなければ親が terminate します。"
+                " 2 回目の Ctrl+C（や SIGBREAK）では親が子を kill します。"
+            )
+            log.info(
+                "子プロセスの終了処理では、ダッシュボード本体に加え同一プロセス内の"
+                "ローカル静的配信・ゲートの待受を閉じ、開いているクライアント接続は切断します。"
+            )
+        elif Supervisor._no_supervise_requested():
+            log.info(
+                "Ctrl+C: このプロセスでシグナルを処理し、ダッシュボード本体・ローカル静的配信・"
+                "ゲートの待受を閉じます（開いている接続は切断）。監督なし（N0VA_NO_SUPERVISE）。"
+            )
+        else:
+            log.info(
+                "Ctrl+C で停止します。ダッシュボード本体・ローカル静的配信・ゲートの待受を閉じます。"
+            )
+        self._content.set_dashboard_bind(self._Host, self._Port)
+        await self._auto_start_content_servers()
         try:
             await super().__Start__()
         finally:
+            await self._shutdown_content_servers_and_clear_db()
             log.info("サーバーを停止しました。")
+
+    async def _auto_start_content_servers(self) -> None:
+        log = logging.getLogger("n0va.dashboard")
+        for row in self._db.list_content_servers():
+            if not row.auto_start:
+                continue
+            try:
+                await self._content.start(row.id, row)
+            except Exception as e:
+                log.warning(
+                    "ローカル静的配信 #%s の自動起動に失敗しました: %s", row.id, e
+                )
+                continue
+            self._db.set_content_server_running(row.id, True)
 
     def _data_dir_path(self) -> Path:
         st = self._db.get_ca_state()
@@ -262,6 +358,28 @@ class DashboardApp(n0va.Service):
 
         r.register("GET", "/api/v1/hosts", self._api_hosts_get)
         r.register("PUT", "/api/v1/hosts", self._api_hosts_put)
+
+        r.register("GET", "/api/v1/content-servers", self._api_content_servers_list)
+        r.register("POST", "/api/v1/content-servers", self._api_content_servers_create)
+        r.register_regex(
+            "GET", r"/api/v1/content-servers/(\d+)", self._api_content_servers_get
+        )
+        r.register_regex(
+            "PUT", r"/api/v1/content-servers/(\d+)", self._api_content_servers_update
+        )
+        r.register_regex(
+            "DELETE", r"/api/v1/content-servers/(\d+)", self._api_content_servers_delete
+        )
+        r.register_regex(
+            "POST",
+            r"/api/v1/content-servers/(\d+)/start",
+            self._api_content_servers_start,
+        )
+        r.register_regex(
+            "POST",
+            r"/api/v1/content-servers/(\d+)/stop",
+            self._api_content_servers_stop,
+        )
 
     async def serverFunctionHandler(self, connection, Request):  # noqa: N802
         log = logging.getLogger("n0va.dashboard.access")
@@ -348,9 +466,7 @@ class DashboardApp(n0va.Service):
             return _json_response({"error": "not found"}, status=404)
         gid = int(m.group(1))
         if self._gates.is_running(gid):
-            return _json_response(
-                {"error": "stop the gate before editing"}, status=409
-            )
+            return _json_response({"error": "stop the gate before editing"}, status=409)
         try:
             body = _parse_json(ctx) or {}
         except json.JSONDecodeError as e:
@@ -541,9 +657,7 @@ class DashboardApp(n0va.Service):
 
     async def _api_list_all_issued(self, ctx: RequestContext) -> HttpResponse:
         rows = self._db.list_all_issued_with_ca()
-        return _json_response(
-            {"certificates": [_issued_with_ca_dict(r) for r in rows]}
-        )
+        return _json_response({"certificates": [_issued_with_ca_dict(r) for r in rows]})
 
     async def _api_ca_issue_for(self, ctx: RequestContext) -> HttpResponse:
         m = re.fullmatch(r"/api/v1/cas/(\d+)/issue", ctx.request.path)
@@ -709,6 +823,192 @@ class DashboardApp(n0va.Service):
             {"ok": False, "error": err or "write failed"},
             status=500,
         )
+
+    def _content_server_dict(self, row: ContentServerRow) -> dict[str, Any]:
+        running = bool(row.running) and self._content.is_running(row.id)
+        return {
+            "id": row.id,
+            "name": row.name,
+            "host": row.host,
+            "port": row.port,
+            "root_path": row.root_path,
+            "auto_start": bool(row.auto_start),
+            "running": running,
+            "base_url": _content_base_url(row.host, row.port),
+            "created_at": row.created_at,
+            "updated_at": row.updated_at,
+        }
+
+    @staticmethod
+    def _parse_listen_port(value: Any) -> int:
+        p = int(value)
+        if not (1 <= p <= 65535):
+            raise ValueError("port must be between 1 and 65535")
+        return p
+
+    async def _api_content_servers_list(self, ctx: RequestContext) -> HttpResponse:
+        rows = self._db.list_content_servers()
+        return _json_response(
+            {"content_servers": [self._content_server_dict(r) for r in rows]}
+        )
+
+    async def _api_content_servers_create(self, ctx: RequestContext) -> HttpResponse:
+        try:
+            body = _parse_json(ctx) or {}
+        except json.JSONDecodeError as e:
+            return _json_response({"error": f"invalid json: {e}"}, status=400)
+        name = str(body.get("name") or "").strip()
+        if not name:
+            return _json_response({"error": "name is required"}, status=400)
+        host = str(body.get("host") or "127.0.0.1").strip() or "127.0.0.1"
+        try:
+            port = self._parse_listen_port(body.get("port"))
+        except (TypeError, ValueError) as e:
+            return _json_response({"error": str(e)}, status=400)
+        root_raw = body.get("root_path")
+        if not isinstance(root_raw, str) or not root_raw.strip():
+            return _json_response({"error": "root_path is required"}, status=400)
+        root = Path(root_raw).expanduser().resolve()
+        if not root.is_dir():
+            return _json_response(
+                {"error": f"document root is not a directory: {root}"}, status=400
+            )
+        auto_start = bool(body.get("auto_start"))
+        if bind_conflicts_dashboard(host, port, self._Host, self._Port):
+            return _json_response(
+                {"error": "port conflicts with this dashboard"}, status=409
+            )
+        try:
+            sid = self._db.insert_content_server(
+                name=name,
+                host=host,
+                port=port,
+                root_path=root.as_posix(),
+                auto_start=auto_start,
+            )
+        except sqlite3.IntegrityError:
+            return _json_response(
+                {"error": "that port is already registered"}, status=409
+            )
+        row = self._db.get_content_server(sid)
+        assert row is not None
+        return _json_response(self._content_server_dict(row), status=201)
+
+    async def _api_content_servers_get(self, ctx: RequestContext) -> HttpResponse:
+        m = re.fullmatch(r"/api/v1/content-servers/(\d+)", ctx.request.path)
+        if not m:
+            return _json_response({"error": "not found"}, status=404)
+        sid = int(m.group(1))
+        row = self._db.get_content_server(sid)
+        if row is None:
+            return _json_response({"error": "not found"}, status=404)
+        return _json_response(self._content_server_dict(row))
+
+    async def _api_content_servers_update(self, ctx: RequestContext) -> HttpResponse:
+        m = re.fullmatch(r"/api/v1/content-servers/(\d+)", ctx.request.path)
+        if not m:
+            return _json_response({"error": "not found"}, status=404)
+        sid = int(m.group(1))
+        if self._content.is_running(sid):
+            return _json_response(
+                {"error": "stop the server before editing"}, status=409
+            )
+        try:
+            body = _parse_json(ctx) or {}
+        except json.JSONDecodeError as e:
+            return _json_response({"error": f"invalid json: {e}"}, status=400)
+        row = self._db.get_content_server(sid)
+        if row is None:
+            return _json_response({"error": "not found"}, status=404)
+        name = str(body.get("name", row.name)).strip() or row.name
+        host = str(body.get("host", row.host)).strip() or row.host
+        try:
+            port = self._parse_listen_port(body.get("port", row.port))
+        except (TypeError, ValueError) as e:
+            return _json_response({"error": str(e)}, status=400)
+        root_raw = body.get("root_path", row.root_path)
+        if not isinstance(root_raw, str) or not root_raw.strip():
+            return _json_response({"error": "root_path is required"}, status=400)
+        root = Path(root_raw).expanduser().resolve()
+        if not root.is_dir():
+            return _json_response(
+                {"error": f"document root is not a directory: {root}"}, status=400
+            )
+        auto_start = bool(body.get("auto_start", row.auto_start))
+        if bind_conflicts_dashboard(host, port, self._Host, self._Port):
+            return _json_response(
+                {"error": "port conflicts with this dashboard"}, status=409
+            )
+        try:
+            ok = self._db.update_content_server(
+                sid,
+                name=name,
+                host=host,
+                port=port,
+                root_path=root.as_posix(),
+                auto_start=auto_start,
+            )
+        except sqlite3.IntegrityError:
+            return _json_response(
+                {"error": "that port is already registered"}, status=409
+            )
+        if not ok:
+            return _json_response({"error": "not found"}, status=404)
+        new_row = self._db.get_content_server(sid)
+        assert new_row is not None
+        return _json_response(self._content_server_dict(new_row))
+
+    async def _api_content_servers_delete(self, ctx: RequestContext) -> HttpResponse:
+        m = re.fullmatch(r"/api/v1/content-servers/(\d+)", ctx.request.path)
+        if not m:
+            return _json_response({"error": "not found"}, status=404)
+        sid = int(m.group(1))
+        if self._content.is_running(sid):
+            await self._content.stop(sid)
+            self._db.set_content_server_running(sid, False)
+        ok = self._db.delete_content_server(sid)
+        if not ok:
+            return _json_response({"error": "not found"}, status=404)
+        return _json_response({"ok": True})
+
+    async def _api_content_servers_start(self, ctx: RequestContext) -> HttpResponse:
+        m = re.fullmatch(r"/api/v1/content-servers/(\d+)/start", ctx.request.path)
+        if not m:
+            return _json_response({"error": "not found"}, status=404)
+        sid = int(m.group(1))
+        row = self._db.get_content_server(sid)
+        if row is None:
+            return _json_response({"error": "not found"}, status=404)
+        if self._content.is_running(sid):
+            return _json_response({"error": "already running"}, status=409)
+        try:
+            await self._content.start(sid, row)
+        except OSError as e:
+            return _json_response({"error": str(e)}, status=500)
+        except RuntimeError as e:
+            return _json_response({"error": str(e)}, status=409)
+        self._db.set_content_server_running(sid, True)
+        new_row = self._db.get_content_server(sid)
+        assert new_row is not None
+        return _json_response(
+            {"ok": True, "server": self._content_server_dict(new_row)}
+        )
+
+    async def _api_content_servers_stop(self, ctx: RequestContext) -> HttpResponse:
+        m = re.fullmatch(r"/api/v1/content-servers/(\d+)/stop", ctx.request.path)
+        if not m:
+            return _json_response({"error": "not found"}, status=404)
+        sid = int(m.group(1))
+        if not self._content.is_running(sid):
+            self._db.set_content_server_running(sid, False)
+            row = self._db.get_content_server(sid)
+            d = self._content_server_dict(row) if row else {"id": sid, "running": False}
+            return _json_response({"ok": True, "server": d})
+        await self._content.stop(sid)
+        self._db.set_content_server_running(sid, False)
+        row = self._db.get_content_server(sid)
+        assert row is not None
+        return _json_response({"ok": True, "server": self._content_server_dict(row)})
 
 
 def create_app(

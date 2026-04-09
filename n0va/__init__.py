@@ -46,15 +46,20 @@ class Service(http.server):
         *,
         dev_static_cache_control: bytes | None = b"no-store",
         dev_static_rescan_interval: float = 2.0,
+        install_stop_signal_handlers: bool = True,
     ):
         """
         `root_path` 以下のファイルは開発向けにメモリ登録され GET で配信される。
         本番の大規模静的配信・CDN は n0va 外の専用基盤を前提とする。
         `dev_static_cache_control`: その配信に付与する `Cache-Control`（`None` で省略）。
         `dev_static_rescan_interval`: 未登録パス時のディスク再 glob の最短間隔（秒）。`0` で毎回。
+        `install_stop_signal_handlers`: 同一プロセスで複数 `Service` を動かすときは False。
         """
         super().__init__(
-            host=host, port=port, dev_static_cache_control=dev_static_cache_control
+            host=host,
+            port=port,
+            dev_static_cache_control=dev_static_cache_control,
+            install_stop_signal_handlers=install_stop_signal_handlers,
         )
         self.RootPath = root_path
         self.OnMemoryFiles = {}

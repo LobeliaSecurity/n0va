@@ -28,6 +28,7 @@ class GateService:
         self._lock = asyncio.Lock()
         self._server: asyncio.Server | None = None
         self._serving_loop: asyncio.AbstractEventLoop | None = None
+        self._accept_writers: set[asyncio.StreamWriter] = set()
         self._lb: dict[str, list[int]] = {}
         self._rr: dict[str, int] = {}
         self._rebuild_lb()
@@ -92,12 +93,27 @@ class GateService:
             self._server = None
             self._serving_loop = None
 
+    def _abort_accept_writers(self) -> None:
+        """accept 済みクライアントを即切断。serve_forever キャンセル経路の wait_closed が進まないのを防ぐ。"""
+        for w in list(self._accept_writers):
+            try:
+                t = w.transport
+                if t is not None and not t.is_closing():
+                    t.abort()
+            except Exception:
+                pass
+        self._accept_writers.clear()
+
     async def stop(self) -> None:
         """`start` と同一イベントループ上のタスクから `await` してリスンを止める。"""
+        self._abort_accept_writers()
         srv = self._server
         if srv is not None:
             srv.close()
-            await srv.wait_closed()
+            try:
+                await asyncio.wait_for(srv.wait_closed(), timeout=12.0)
+            except asyncio.TimeoutError:
+                pass
 
     def request_stop(self) -> None:
         """
@@ -109,7 +125,7 @@ class GateService:
             return
 
         def _schedule() -> None:
-            asyncio.create_task(self.stop())
+            asyncio.get_running_loop().create_task(self.stop())
 
         loop.call_soon_threadsafe(_schedule)
 
@@ -166,15 +182,23 @@ class GateService:
 
     async def _on_plain_client(self, reader, writer):
         n0va.core.stream.StreamSocketOptions.apply_tcp_nodelay(writer)
-        connection = n0va.core.stream.AsyncStream(reader, writer)
-        route_key = self._config.entrance.default_route
-        await self._proxy_with_route(connection, route_key)
+        self._accept_writers.add(writer)
+        try:
+            connection = n0va.core.stream.AsyncStream(reader, writer)
+            route_key = self._config.entrance.default_route
+            await self._proxy_with_route(connection, route_key)
+        finally:
+            self._accept_writers.discard(writer)
 
     async def _on_tls_sni_client(self, reader, writer):
         n0va.core.stream.StreamSocketOptions.apply_tcp_nodelay(writer)
-        connection = n0va.core.stream.AsyncStream(reader, writer)
-        route_key = connection._Writer.get_extra_info("ssl_object").context.DomainName
-        await self._proxy_with_route(connection, route_key)
+        self._accept_writers.add(writer)
+        try:
+            connection = n0va.core.stream.AsyncStream(reader, writer)
+            route_key = connection._Writer.get_extra_info("ssl_object").context.DomainName
+            await self._proxy_with_route(connection, route_key)
+        finally:
+            self._accept_writers.discard(writer)
 
     async def _proxy_with_route(
         self,
@@ -248,74 +272,82 @@ class GateService:
 
     async def _on_tls_manual_client(self, reader, writer):
         n0va.core.stream.StreamSocketOptions.apply_tcp_nodelay(writer)
-        entrance_connection = n0va.core.stream.AsyncManualSslStream(reader, writer)
-        await entrance_connection.ReadClientHello()
-        server_name = entrance_connection.serverName
-        cfg = self._config
-        if not isinstance(cfg.entrance, EntranceTlsManual):
-            writer.close()
-            return
-        ctx_map = cfg.entrance.sni_contexts
-        if server_name is None:
-            server_name = next(iter(ctx_map.keys()))
-        route = cfg.routes[server_name]
-        upstream, minimum_index = self._pick_upstream(server_name)
-        destination_connection = None
+        self._accept_writers.add(writer)
         try:
-            if entrance_connection.isTryingHandshake:
-                if upstream.tls is not None:
-                    dest_ctx = ssl.create_default_context()
-                    if len(entrance_connection.ALPN) > 0:
-                        dest_ctx.set_alpn_protocols(entrance_connection.ALPN)
-                    dr, dw = await asyncio.open_connection(
-                        upstream.host,
-                        upstream.port,
-                        ssl=dest_ctx,
-                        server_hostname=upstream.tls.server_hostname,
-                    )
-                    n0va.core.stream.StreamSocketOptions.apply_tcp_nodelay(dw)
-                    destination_connection = n0va.core.stream.AsyncStream(dr, dw)
-                    selected_alpn = destination_connection._Writer.get_extra_info(
-                        "ssl_object"
-                    ).selected_alpn_protocol()
-                    entrance_ssl_context = ctx_map[server_name]
-                    if selected_alpn is not None:
-                        entrance_ssl_context.set_alpn_protocols([selected_alpn])
-                    entrance_connection.SslContext = entrance_ssl_context
-                    await entrance_connection.Handshake()
+            entrance_connection = n0va.core.stream.AsyncManualSslStream(reader, writer)
+            await entrance_connection.ReadClientHello()
+            server_name = entrance_connection.serverName
+            cfg = self._config
+            if not isinstance(cfg.entrance, EntranceTlsManual):
+                writer.close()
+                return
+            ctx_map = cfg.entrance.sni_contexts
+            if server_name is None:
+                server_name = next(iter(ctx_map.keys()))
+            route = cfg.routes[server_name]
+            upstream, minimum_index = self._pick_upstream(server_name)
+            destination_connection = None
+            try:
+                if entrance_connection.isTryingHandshake:
+                    if upstream.tls is not None:
+                        dest_ctx = ssl.create_default_context()
+                        if len(entrance_connection.ALPN) > 0:
+                            dest_ctx.set_alpn_protocols(entrance_connection.ALPN)
+                        dr, dw = await asyncio.open_connection(
+                            upstream.host,
+                            upstream.port,
+                            ssl=dest_ctx,
+                            server_hostname=upstream.tls.server_hostname,
+                        )
+                        n0va.core.stream.StreamSocketOptions.apply_tcp_nodelay(dw)
+                        destination_connection = n0va.core.stream.AsyncStream(dr, dw)
+                        selected_alpn = destination_connection._Writer.get_extra_info(
+                            "ssl_object"
+                        ).selected_alpn_protocol()
+                        entrance_ssl_context = ctx_map[server_name]
+                        if selected_alpn is not None:
+                            entrance_ssl_context.set_alpn_protocols([selected_alpn])
+                        entrance_connection.SslContext = entrance_ssl_context
+                        await entrance_connection.Handshake()
+                    else:
+                        entrance_ssl_context = ctx_map[server_name]
+                        entrance_connection.SslContext = entrance_ssl_context
+                        await entrance_connection.Handshake()
+                        dr, dw = await asyncio.open_connection(
+                            upstream.host, upstream.port
+                        )
+                        n0va.core.stream.StreamSocketOptions.apply_tcp_nodelay(dw)
+                        destination_connection = n0va.core.stream.AsyncStream(dr, dw)
                 else:
-                    entrance_ssl_context = ctx_map[server_name]
-                    entrance_connection.SslContext = entrance_ssl_context
-                    await entrance_connection.Handshake()
-                    dr, dw = await asyncio.open_connection(upstream.host, upstream.port)
-                    n0va.core.stream.StreamSocketOptions.apply_tcp_nodelay(dw)
-                    destination_connection = n0va.core.stream.AsyncStream(dr, dw)
-            else:
-                if upstream.tls is not None:
-                    dest_ctx = ssl.create_default_context()
-                    dr, dw = await asyncio.open_connection(
-                        upstream.host,
-                        upstream.port,
-                        ssl=dest_ctx,
-                        server_hostname=upstream.tls.server_hostname,
+                    if upstream.tls is not None:
+                        dest_ctx = ssl.create_default_context()
+                        dr, dw = await asyncio.open_connection(
+                            upstream.host,
+                            upstream.port,
+                            ssl=dest_ctx,
+                            server_hostname=upstream.tls.server_hostname,
+                        )
+                        n0va.core.stream.StreamSocketOptions.apply_tcp_nodelay(dw)
+                        destination_connection = n0va.core.stream.AsyncStream(dr, dw)
+                    else:
+                        dr, dw = await asyncio.open_connection(
+                            upstream.host, upstream.port
+                        )
+                        n0va.core.stream.StreamSocketOptions.apply_tcp_nodelay(dw)
+                        destination_connection = n0va.core.stream.AsyncStream(dr, dw)
+                    raw = await route.on_entrance_to_destination(
+                        entrance_connection._client_hello_buf,
+                        entrance_connection,
+                        destination_connection,
                     )
-                    n0va.core.stream.StreamSocketOptions.apply_tcp_nodelay(dw)
-                    destination_connection = n0va.core.stream.AsyncStream(dr, dw)
-                else:
-                    dr, dw = await asyncio.open_connection(upstream.host, upstream.port)
-                    n0va.core.stream.StreamSocketOptions.apply_tcp_nodelay(dw)
-                    destination_connection = n0va.core.stream.AsyncStream(dr, dw)
-                raw = await route.on_entrance_to_destination(
-                    entrance_connection._client_hello_buf,
-                    entrance_connection,
-                    destination_connection,
-                )
-                if raw is not None:
-                    await destination_connection.Send(raw)
-                entrance_connection = n0va.core.stream.AsyncStream(
-                    entrance_connection._Reader, entrance_connection._Writer
-                )
+                    if raw is not None:
+                        await destination_connection.Send(raw)
+                    entrance_connection = n0va.core.stream.AsyncStream(
+                        entrance_connection._Reader, entrance_connection._Writer
+                    )
 
-            await self._opengate(entrance_connection, destination_connection, route)
+                await self._opengate(entrance_connection, destination_connection, route)
+            finally:
+                self._release_upstream(server_name, minimum_index, route.strategy)
         finally:
-            self._release_upstream(server_name, minimum_index, route.strategy)
+            self._accept_writers.discard(writer)

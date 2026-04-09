@@ -5,6 +5,7 @@ import { CaDetailPage } from "@/pages/CaDetailPage";
 import { CaListPage } from "@/pages/CaListPage";
 import { GateFormPage } from "@/pages/GateFormPage";
 import { GatesPage } from "@/pages/GatesPage";
+import { ContentServersPage } from "@/pages/ContentServersPage";
 import { HomePage } from "@/pages/HomePage";
 import { HostsPage } from "@/pages/HostsPage";
 import { PasswordPage } from "@/pages/PasswordPage";
@@ -15,6 +16,7 @@ export default function App() {
     <Routes>
       <Route element={<AppShell />}>
         <Route path="/" element={<HomePage />} />
+        <Route path="/content" element={<ContentServersPage />} />
         <Route path="/gates" element={<GatesPage />} />
         <Route path="/gates/:gateId" element={<GateFormPage />} />
         <Route path="/hosts" element={<HostsPage />} />

@@ -58,14 +58,20 @@ class server(AsyncTcp):
         port,
         *,
         dev_static_cache_control: bytes | None = b"no-store",
+        install_stop_signal_handlers: bool = True,
     ):
         """
         `dev_static_cache_control`: 組み込み静的ファイル配信（`OnMemoryFiles`）に付ける
         `Cache-Control`。ローカル開発ではブラウザキャッシュを避ける `no-store` が既定。
         本番向けの静的配信は別途（リバースプロキシ・オブジェクトストレージ等）を想定し、
         `None` で無効化もできる。
+        `install_stop_signal_handlers`: 同一プロセスで複数リスナーを動かすときは False。
         """
-        super().__init__(host=host, port=port)
+        super().__init__(
+            host=host,
+            port=port,
+            install_stop_signal_handlers=install_stop_signal_handlers,
+        )
         self.DefaultFile = "/index.html"
         self.router = Router()
         self.OnMemoryFiles = {}
