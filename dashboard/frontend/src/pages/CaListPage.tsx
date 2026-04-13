@@ -144,19 +144,31 @@ export function CaListPage() {
       )}
 
       {!loading && filtered.length > 0 && (
-        <ul className="space-y-2">
-          {filtered.map((c) => (
-            <li key={c.id}>
-              <AppLink
-                to={`/ca/${c.id}`}
-                className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-slate-200 bg-white px-4 py-3 text-sm shadow-sm no-underline transition hover:border-indigo-200 hover:shadow-md dark:border-slate-700 dark:bg-slate-900 dark:hover:border-indigo-500/50"
-              >
-                <span className="font-medium text-slate-900 dark:text-slate-50">{c.name}</span>
-                <span className="text-xs text-slate-500 dark:text-slate-400">{c.common_name}</span>
-              </AppLink>
-            </li>
-          ))}
-        </ul>
+        <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-900">
+          <ul className="divide-y divide-slate-200 dark:divide-slate-700">
+            {filtered.map((c) => (
+              <li key={c.id}>
+                <AppLink
+                  to={`/ca/${c.id}`}
+                  className="flex w-full min-w-0 items-center gap-4 px-4 py-3 text-left text-sm no-underline transition hover:bg-slate-50 dark:hover:bg-slate-800/60"
+                >
+                  <div className="min-w-0 flex-1">
+                    <div className="flex min-w-0 items-baseline gap-2">
+                      <span className="truncate font-medium text-slate-900 dark:text-slate-50">{c.name}</span>
+                      <span className="shrink-0 font-mono text-xs text-slate-400">#{c.id}</span>
+                    </div>
+                    <p className="mt-0.5 truncate font-mono text-xs text-slate-500 dark:text-slate-400">
+                      {c.common_name}
+                    </p>
+                  </div>
+                  <span className="shrink-0 tabular-nums text-xs text-slate-500 dark:text-slate-400">
+                    {t("ca.issuedBadge", { count: c.issued_count })}
+                  </span>
+                </AppLink>
+              </li>
+            ))}
+          </ul>
+        </div>
       )}
     </>
   );
