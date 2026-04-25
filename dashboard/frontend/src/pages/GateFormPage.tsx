@@ -1,4 +1,4 @@
-import { useCallback, useDeferredValue, useEffect, useMemo, useState } from "react";
+import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 
 import { useBlocker, useHref, useNavigate, useParams } from "react-router-dom";
 import { Trans, useTranslation } from "react-i18next";
@@ -122,6 +122,7 @@ export function GateFormPage() {
   const [baseline, setBaseline] = useState("");
   const [saving, setSaving] = useState(false);
   const [gateActionPending, setGateActionPending] = useState(false);
+  const bypassUnsavedBlockRef = useRef(false);
 
   const defaultNewBaseline = useMemo(
     () => JSON.stringify({ name: "new-gate", model: defaultGateFormModel() }),
@@ -190,7 +191,12 @@ export function GateFormPage() {
     [name, model],
   );
   const isDirty = !loading && baseline !== "" && formSnapshot !== baseline;
-  const blocker = useBlocker(isDirty);
+  const blocker = useBlocker(() => isDirty && !bypassUnsavedBlockRef.current);
+
+  useEffect(() => {
+    // 作成完了後の画面遷移で一時的に解除したブロッカーを通常状態へ戻す
+    bypassUnsavedBlockRef.current = false;
+  }, [gateId]);
 
   useEffect(() => {
     const onBeforeUnload = (e: BeforeUnloadEvent) => {
@@ -465,6 +471,7 @@ export function GateFormPage() {
       if (isNew) {
         const created = await createGate({ name: name.trim() || "gate", config: cfg });
         toast.success(t("gateForm.msgCreated"));
+        bypassUnsavedBlockRef.current = true;
         navigate(`/gates/${created.id}`, { replace: true });
       } else {
         await updateGate(id, { name: name.trim() || "gate", config: cfg });
