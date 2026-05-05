@@ -46,6 +46,7 @@ setuptools.setup(
     include_package_data=bool(package_data),
     python_requires=">=3.10",
     install_requires=[
+        "cryptography>=42.0.0",
         "pyOpenSSL>=23.0.0",
     ],
     extras_require={

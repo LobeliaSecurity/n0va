@@ -1,6 +1,60 @@
-import ssl
+from __future__ import annotations
 
-from OpenSSL import crypto
+import ssl
+from datetime import datetime, timedelta, timezone
+
+from cryptography import x509
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import rsa
+from cryptography.hazmat.primitives.serialization import (
+    BestAvailableEncryption,
+    Encoding,
+    NoEncryption,
+    PrivateFormat,
+    load_pem_private_key,
+    pkcs12,
+)
+from cryptography.x509.oid import ExtendedKeyUsageOID, NameOID
+
+
+def _build_x509_name(
+    common_name: str,
+    organization: str = "",
+    state: str = "",
+    locality: str = "",
+    country: str = "",
+) -> x509.Name:
+    """空の C（国コード）は付与しない（2 文字でない C はスキップ）。"""
+    attrs: list[x509.NameAttribute] = [
+        x509.NameAttribute(NameOID.COMMON_NAME, common_name),
+    ]
+    v = (organization or "").strip()
+    if v:
+        attrs.append(x509.NameAttribute(NameOID.ORGANIZATION_NAME, v))
+    v = (state or "").strip()
+    if v:
+        attrs.append(x509.NameAttribute(NameOID.STATE_OR_PROVINCE_NAME, v))
+    v = (locality or "").strip()
+    if v:
+        attrs.append(x509.NameAttribute(NameOID.LOCALITY_NAME, v))
+    v = (country or "").strip()
+    if len(v) == 2:
+        attrs.append(x509.NameAttribute(NameOID.COUNTRY_NAME, v))
+    return x509.Name(attrs)
+
+
+def _positive_serial(n: int) -> int:
+    """cryptography はシリアルに正の整数を要求する。0 のときは 1 とする（ダッシュボード既定の 0 でも発行できるように）。"""
+    return n if n > 0 else 1
+
+
+def _validity_window(not_before_sec: int, not_after_sec: int) -> tuple[datetime, datetime]:
+    """従来の `gmtime_adj_notBefore` / `gmtime_adj_notAfter` に合わせ、いずれも「署名時点の UTC からの秒」。"""
+    base = datetime.now(timezone.utc)
+    return (
+        base + timedelta(seconds=not_before_sec),
+        base + timedelta(seconds=not_after_sec),
+    )
 
 
 class ServerTlsContext:
@@ -29,84 +83,69 @@ class CertificateAuthority:
         self.CA_PrivateKeyPath_pem = ""
         self.CA_PrivateKeyPath_der = ""
 
-    @staticmethod
-    def _subject_set_field(name: crypto.X509Name, field: str, value: str) -> None:
-        """空文字は付与しない（空の C は ASN.1 上問題になり `string too short` 等の原因になる）。"""
-        v = (value or "").strip()
-        if not v:
-            return
-        if field == "C" and len(v) != 2:
-            return
-        setattr(name, field, v)
-
     def ca_make(self) -> None:
-        # create key pair
-        key = crypto.PKey()
-        key.generate_key(crypto.TYPE_RSA, 4096)
-
-        # create self-signed cert
-        cert = crypto.X509()
-        subj = cert.get_subject()
+        key = rsa.generate_private_key(public_exponent=65537, key_size=4096)
         ca_cn = (self.CA_CommonName or "n0va-local-ca").strip() or "n0va-local-ca"
-        subj.CN = ca_cn
-        CertificateAuthority._subject_set_field(subj, "O", self.CA_Organization)
-        CertificateAuthority._subject_set_field(subj, "ST", self.CA_State)
-        CertificateAuthority._subject_set_field(subj, "L", self.CA_Locality)
-        CertificateAuthority._subject_set_field(subj, "C", self.CA_Country)
-        cert.set_serial_number(self.CA_SerialNumber)
-        cert.gmtime_adj_notBefore(self.CA_NotBefore)
-        cert.gmtime_adj_notAfter(self.CA_NotAfter)
-        cert.set_issuer(cert.get_subject())
-        cert.set_pubkey(key)
-        cert.add_extensions(
-            [
-                crypto.X509Extension(
-                    "basicConstraints".encode("ascii"), True, "CA:TRUE".encode("ascii")
-                ),
-                crypto.X509Extension(
-                    "keyUsage".encode("ascii"),
-                    True,
-                    "cRLSign, keyCertSign".encode("ascii"),
-                ),
-                crypto.X509Extension(
-                    "subjectKeyIdentifier".encode("ascii"), False, b"hash", subject=cert
-                ),
-            ]
+        subject = _build_x509_name(
+            ca_cn,
+            self.CA_Organization,
+            self.CA_State,
+            self.CA_Locality,
+            self.CA_Country,
         )
-        cert.add_extensions(
-            [
-                crypto.X509Extension(
-                    "authorityKeyIdentifier".encode("ascii"),
-                    False,
-                    b"keyid:always",
-                    issuer=cert,
-                )
-            ]
-        )
-        # v3
-        cert.set_version(2)
-        # self signature
-        cert.sign(key, "sha256")
-
-        # save cert
-        open(self.CA_CertPath_pem, "wb").write(
-            crypto.dump_certificate(crypto.FILETYPE_PEM, cert)
-        )
-        pw = (self.CA_PrivatePassKey or "").strip()
-        if pw:
-            key_pem = crypto.dump_privatekey(
-                crypto.FILETYPE_PEM,
-                key,
-                "aes256",
-                pw.encode("utf-8"),
+        nb, na = _validity_window(self.CA_NotBefore, self.CA_NotAfter)
+        pubkey = key.public_key()
+        cert = (
+            x509.CertificateBuilder()
+            .subject_name(subject)
+            .issuer_name(subject)
+            .public_key(pubkey)
+            .serial_number(_positive_serial(int(self.CA_SerialNumber)))
+            .not_valid_before(nb)
+            .not_valid_after(na)
+            .add_extension(
+                x509.BasicConstraints(ca=True, path_length=None),
+                critical=True,
             )
-        else:
-            # 開発用: パスフレーズなしは平文 PEM（対話プロンプトを避ける）
-            key_pem = crypto.dump_privatekey(crypto.FILETYPE_PEM, key)
-        open(self.CA_PrivateKeyPath_pem, "wb").write(key_pem)
-        open(self.CA_PrivateKeyPath_der, "wb").write(
-            crypto.dump_certificate(crypto.FILETYPE_ASN1, cert)
+            .add_extension(
+                x509.KeyUsage(
+                    digital_signature=False,
+                    content_commitment=False,
+                    key_encipherment=False,
+                    data_encipherment=False,
+                    key_agreement=False,
+                    key_cert_sign=True,
+                    crl_sign=True,
+                    encipher_only=False,
+                    decipher_only=False,
+                ),
+                critical=True,
+            )
+            .add_extension(
+                x509.SubjectKeyIdentifier.from_public_key(pubkey),
+                critical=False,
+            )
+            .add_extension(
+                x509.AuthorityKeyIdentifier.from_issuer_public_key(pubkey),
+                critical=False,
+            )
+            .sign(key, hashes.SHA256())
         )
+
+        open(self.CA_CertPath_pem, "wb").write(cert.public_bytes(Encoding.PEM))
+        pw = (self.CA_PrivatePassKey or "").strip()
+        enc: serialization.KeySerializationEncryption
+        if pw:
+            enc = BestAvailableEncryption(pw.encode("utf-8"))
+        else:
+            enc = NoEncryption()
+        key_pem = key.private_bytes(
+            Encoding.PEM,
+            PrivateFormat.TraditionalOpenSSL,
+            enc,
+        )
+        open(self.CA_PrivateKeyPath_pem, "wb").write(key_pem)
+        open(self.CA_PrivateKeyPath_der, "wb").write(cert.public_bytes(Encoding.DER))
 
 
 class Certificate(CertificateAuthority):
@@ -126,91 +165,101 @@ class Certificate(CertificateAuthority):
         self.pfxPath = ""
 
     @staticmethod
-    def _load_private_key_from_pem(pem: bytes, passphrase: str | None) -> crypto.PKey:
+    def _load_private_key_from_pem(pem: bytes, passphrase: str | None):
         """
         PEM 秘密鍵を読み込む。平文・空パス暗号化・パス付き暗号化を区別する。
         `passphrase` が非空のときはそれのみ試す。
-        非対話用途: パスフレーズなしのときは `passphrase=None` を先に使わず `b""` を試し、
-        暗号化 PEM で OpenSSL が TTY にパスフレーズを聞きにいくのを避ける。
+        非対話用途: パスフレーズなしのときは暗号化 PEM で対話プロンプトを避けるため `password=b\"\"` を先に試す。
         """
         pw = (passphrase or "").strip()
         if pw:
-            return crypto.load_privatekey(
-                crypto.FILETYPE_PEM, pem, passphrase=pw.encode("utf-8")
-            )
+            return load_pem_private_key(pem, password=pw.encode("utf-8"))
         try:
-            return crypto.load_privatekey(crypto.FILETYPE_PEM, pem, passphrase=b"")
-        except crypto.Error:
+            return load_pem_private_key(pem, password=b"")
+        except (TypeError, ValueError):
             pass
-        return crypto.load_privatekey(crypto.FILETYPE_PEM, pem, passphrase=None)
+        return load_pem_private_key(pem, password=None)
 
     def c_make(self):
-        f = open(self.CA_PrivateKeyPath_pem, "rb")
-        ky = f.read()
-        f.close()
-        f = open(self.CA_CertPath_pem, "rb")
-        ct = f.read()
-        f.close()
+        with open(self.CA_PrivateKeyPath_pem, "rb") as f:
+            ky = f.read()
+        with open(self.CA_CertPath_pem, "rb") as f:
+            ct = f.read()
         pp = (self.CA_PrivatePassKey or "").strip() or None
-        CAkey = Certificate._load_private_key_from_pem(ky, pp)
-        CAcert = crypto.load_certificate(crypto.FILETYPE_PEM, ct)
+        ca_key = Certificate._load_private_key_from_pem(ky, pp)
+        ca_cert = x509.load_pem_x509_certificate(ct)
 
-        key = crypto.PKey()
-        key.generate_key(crypto.TYPE_RSA, 4096)
-        cert = crypto.X509()
-        subj = cert.get_subject()
+        leaf_key = rsa.generate_private_key(public_exponent=65537, key_size=4096)
         cn = (self.commonName or "localhost").strip() or "localhost"
-        subj.CN = cn
-        CertificateAuthority._subject_set_field(subj, "O", self.organization)
-        CertificateAuthority._subject_set_field(subj, "ST", self.state)
-        CertificateAuthority._subject_set_field(subj, "L", self.locality)
-        CertificateAuthority._subject_set_field(subj, "C", self.country)
-        cert.set_serial_number(self.serialNumber)
-        cert.gmtime_adj_notBefore(self.notBefore)
-        cert.gmtime_adj_notAfter(self.notAfter)
-        cert.set_issuer(CAcert.get_subject())
-        cert.set_pubkey(key)
-        cert.add_extensions(
-            [
-                crypto.X509Extension(
-                    "keyUsage".encode("ascii"),
-                    True,
-                    b"digitalSignature, keyEncipherment",
-                ),
-                crypto.X509Extension(
-                    "basicConstraints".encode("ascii"), True, b"CA:FALSE"
-                ),
-                crypto.X509Extension(
-                    "extendedKeyUsage".encode("ascii"), False, b"clientAuth, serverAuth"
-                ),
-                crypto.X509Extension(
-                    "subjectAltName".encode("ascii"),
-                    False,
-                    b"".join(
-                        [
-                            b"DNS:*.",
-                            cn.encode("ascii"),
-                            b", DNS:",
-                            cn.encode("ascii"),
-                        ]
-                    ),
-                ),
-            ]
+        subject = _build_x509_name(
+            cn,
+            self.organization,
+            self.state,
+            self.locality,
+            self.country,
         )
-        # v3
-        cert.set_version(2)
-        cert.sign(CAkey, "sha256")
+        nb, na = _validity_window(self.notBefore, self.notAfter)
+        leaf_pub = leaf_key.public_key()
+        cert = (
+            x509.CertificateBuilder()
+            .subject_name(subject)
+            .issuer_name(ca_cert.subject)
+            .public_key(leaf_pub)
+            .serial_number(_positive_serial(int(self.serialNumber)))
+            .not_valid_before(nb)
+            .not_valid_after(na)
+            .add_extension(
+                x509.KeyUsage(
+                    digital_signature=True,
+                    content_commitment=False,
+                    key_encipherment=True,
+                    data_encipherment=False,
+                    key_agreement=False,
+                    key_cert_sign=False,
+                    crl_sign=False,
+                    encipher_only=False,
+                    decipher_only=False,
+                ),
+                critical=True,
+            )
+            .add_extension(
+                x509.BasicConstraints(ca=False, path_length=None),
+                critical=True,
+            )
+            .add_extension(
+                x509.ExtendedKeyUsage(
+                    [
+                        ExtendedKeyUsageOID.CLIENT_AUTH,
+                        ExtendedKeyUsageOID.SERVER_AUTH,
+                    ]
+                ),
+                critical=False,
+            )
+            .add_extension(
+                x509.SubjectAlternativeName(
+                    [
+                        x509.DNSName(f"*.{cn}"),
+                        x509.DNSName(cn),
+                    ]
+                ),
+                critical=False,
+            )
+            .sign(ca_key, hashes.SHA256())
+        )
 
-        # save cert
-        DC = crypto.dump_certificate(crypto.FILETYPE_PEM, cert)
-        open(self.certPath, "wb").write(DC)
-
-        # save private key
-        DP = crypto.dump_privatekey(crypto.FILETYPE_PEM, key)
-        open(self.privateKeyPath, "wb").write(DP)
-
-        p12 = crypto.PKCS12()
-        p12.set_certificate(cert)
-        p12.set_privatekey(key)
-        p12_text = p12.export()
-        open(self.pfxPath, "wb").write(p12_text)
+        open(self.certPath, "wb").write(cert.public_bytes(Encoding.PEM))
+        open(self.privateKeyPath, "wb").write(
+            leaf_key.private_bytes(
+                Encoding.PEM,
+                PrivateFormat.TraditionalOpenSSL,
+                NoEncryption(),
+            )
+        )
+        p12_data = pkcs12.serialize_key_and_certificates(
+            name=b"n0va",
+            key=leaf_key,
+            cert=cert,
+            cas=[ca_cert],
+            encryption_algorithm=NoEncryption(),
+        )
+        open(self.pfxPath, "wb").write(p12_data)
